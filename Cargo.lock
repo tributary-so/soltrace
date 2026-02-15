@@ -609,15 +609,6 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "base64"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "979d348dc50dfcd050a87df408ec61f01a0a27ee9b4ebdc6085baba8275b2c7f"
-dependencies = [
- "byteorder",
-]
-
-[[package]]
-name = "base64"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3441f0f7b02788e948e47f457ca01f1d7e6d92c693bc132c22b087d3141c03ff"
@@ -5360,14 +5351,9 @@ name = "soltrace-backfill"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.4.2",
- "chrono",
+ "base64 0.22.1",
  "clap 4.5.57",
- "futures",
  "solana-client",
- "solana-rpc-client",
- "solana-sdk",
- "solana-transaction-status",
  "soltrace-core",
  "sqlx",
  "thiserror 1.0.69",
@@ -5382,7 +5368,6 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anyhow",
- "base64 0.4.2",
  "borsh 1.6.0",
  "chrono",
  "hex",
@@ -5391,10 +5376,8 @@ dependencies = [
  "sha2 0.10.9",
  "solana-account-decoder",
  "solana-sdk",
- "solana-transaction-status",
  "sqlx",
  "thiserror 1.0.69",
- "tokio",
  "tracing",
 ]
 
@@ -5403,14 +5386,11 @@ name = "soltrace-live"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "clap 4.5.57",
  "futures",
  "serde",
  "serde_json",
  "solana-client",
- "solana-sdk",
- "solana-transaction-status",
  "soltrace-core",
  "sqlx",
  "thiserror 1.0.69",
