@@ -5354,6 +5354,8 @@ dependencies = [
  "base64 0.22.1",
  "clap 4.5.57",
  "solana-client",
+ "solana-sdk",
+ "solana-transaction-status",
  "soltrace-core",
  "sqlx",
  "thiserror 1.0.69",
@@ -5368,6 +5370,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anyhow",
+ "base64 0.22.1",
  "borsh 1.6.0",
  "chrono",
  "hex",
@@ -5376,8 +5379,10 @@ dependencies = [
  "sha2 0.10.9",
  "solana-account-decoder",
  "solana-sdk",
+ "solana-transaction-status",
  "sqlx",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
 ]
 
@@ -5386,11 +5391,14 @@ name = "soltrace-live"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap 4.5.57",
  "futures",
  "serde",
  "serde_json",
  "solana-client",
+ "solana-sdk",
+ "solana-transaction-status",
  "soltrace-core",
  "sqlx",
  "thiserror 1.0.69",

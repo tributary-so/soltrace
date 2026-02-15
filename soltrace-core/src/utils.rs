@@ -6,6 +6,8 @@ use crate::{
 };
 use anyhow::Result;
 use tracing::{info, warn, debug, error};
+use solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 /// Load all IDL files from a directory
 pub async fn load_idls(idl_parser: &mut IdlParser, idl_dir: &str) -> Result<()> {
@@ -23,7 +25,7 @@ pub async fn load_idls(idl_parser: &mut IdlParser, idl_dir: &str) -> Result<()> 
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "json") {
-            match idl_parser.load_from_file(path.to_str().unwrap()).await {
+            match idl_parser.load_from_file(path.to_str().unwrap()) {
                 Ok(_) => {
                     loaded_count += 1;
                     info!("Loaded IDL: {}", path.display());
@@ -43,29 +45,17 @@ pub async fn load_idls(idl_parser: &mut IdlParser, idl_dir: &str) -> Result<()> 
 }
 
 /// Process a single transaction and extract events
-pub fn process_transaction(
-    transaction: solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta,
+pub async fn process_transaction(
+    transaction: EncodedConfirmedTransactionWithStatusMeta,
     program_id_str: &str,
     event_decoder: &EventDecoder,
     db: &Database,
 ) -> Result<Vec<String>> {
     let mut processed_signatures = Vec::new();
 
-    // Extract transaction data
-    let (transaction_with_meta, slot) = match transaction {
-        solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta::Complete(tx) => {
-            (tx, tx.slot)
-        }
-        solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta::AccountsOnly(tx) => {
-            debug!("AccountsOnly transaction, skipping");
-            return Ok(processed_signatures);
-        }
-        solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta::UiTransaction(_, _) => {
-            return Err(anyhow::anyhow!("UiTransaction format not supported"));
-        }
-    };
+    let slot = transaction.slot;
 
-    let meta = transaction_with_meta.transaction.meta
+    let meta = transaction.transaction.meta
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Transaction has no metadata"))?;
 
@@ -76,16 +66,23 @@ pub fn process_transaction(
     }
 
     // Check if we have logs
-    let logs = meta.log_messages.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Transaction has no logs"))?;
+    let logs: Option<Vec<String>> = meta.log_messages.clone().into();
+    let logs = logs.ok_or_else(|| anyhow::anyhow!("Transaction has no logs"))?;
 
-    // Get transaction signature
-    let signature = transaction_with_meta.transaction.transaction.signatures.first()
-        .ok_or_else(|| anyhow::anyhow!("Transaction has no signature"))?
-        .to_string();
+    // Get transaction signature from the encoded transaction
+    let signature = match &transaction.transaction.transaction {
+        solana_transaction_status::EncodedTransaction::Json(ui_tx) => {
+            ui_tx.signatures.first()
+                .ok_or_else(|| anyhow::anyhow!("Transaction has no signature"))?
+                .to_string()
+        }
+        _ => {
+            return Err(anyhow::anyhow!("Only JSON-encoded transactions are supported"));
+        }
+    };
 
     // Get block time from transaction if available
-    let block_time = transaction_with_meta.block_time;
+    let block_time = transaction.block_time;
     let timestamp = block_time
         .and_then(|bt| chrono::DateTime::from_timestamp(bt, 0))
         .unwrap_or_else(chrono::Utc::now);
@@ -93,7 +90,7 @@ pub fn process_transaction(
     // Process logs for events
     let mut events_count = 0;
     for log in logs {
-        if let Some(event_data) = extract_event_from_log(log, program_id_str) {
+        if let Some(event_data) = extract_event_from_log(&log, program_id_str) {
             // Decode event
             match event_decoder.decode_event(program_id_str, &event_data) {
                 Ok(decoded_event) => {
@@ -103,7 +100,7 @@ pub fn process_transaction(
                         signature: signature.clone(),
                         program_id: program_id_str.parse()
                             .unwrap_or_else(|_| solana_sdk::pubkey::Pubkey::default()),
-                        log: log.clone(),
+                        log: log.to_string(),
                         timestamp,
                     };
 
@@ -144,7 +141,7 @@ pub fn extract_event_from_log(log: &str, program_id_str: &str) -> Option<Vec<u8>
 
     if log.starts_with("Program data:") {
         let data_str = log.strip_prefix("Program data: ")?.trim();
-        if let Ok(data) = base64::decode(data_str) {
+        if let Ok(data) = STANDARD.decode(data_str) {
             // Verify this is for our program
             if log.contains(program_id_str) {
                 return Some(data);

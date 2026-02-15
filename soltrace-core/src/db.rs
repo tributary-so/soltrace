@@ -4,13 +4,13 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use solana_sdk::pubkey::Pubkey;
+use sqlx::Row;
 
 /// Event record stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct EventRecord {
     pub id: i64,
-    pub slot: Slot,
+    pub slot: i64,
     pub signature: String,
     pub program_id: String,
     pub event_name: String,
@@ -64,13 +64,13 @@ impl Database {
 
     /// Store a decoded event
     pub async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent) -> Result<i64> {
-        let discriminator_hex = hex::encode_upper(&event.data);
+        let discriminator_hex = hex::encode_upper(event.discriminator);
 
         let result = sqlx::query(r#"
             INSERT INTO events (slot, signature, program_id, event_name, discriminator, data, timestamp)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
         "#)
-        .bind(raw.slot)
+        .bind(raw.slot as i64)
         .bind(&raw.signature)
         .bind(raw.program_id.to_string())
         .bind(&event.event_name)
@@ -80,7 +80,7 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-        Ok(result.last_insert_rowid() as i64)
+        Ok(result.last_insert_rowid())
     }
 
     /// Get events by slot range
@@ -92,8 +92,8 @@ impl Database {
         let events = sqlx::query_as::<_, EventRecord>(
             "SELECT * FROM events WHERE slot >= ?1 AND slot <= ?2 ORDER BY slot ASC"
         )
-        .bind(start_slot)
-        .bind(end_slot)
+        .bind(start_slot as i64)
+        .bind(end_slot as i64)
         .fetch_all(&self.pool)
         .await?;
 
@@ -133,7 +133,7 @@ impl Database {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.and_then(|r| r.get("max_slot")))
+        Ok(row.and_then(|r| r.get::<Option<i64>, _>("max_slot")).map(|s| s as Slot))
     }
 
     /// Check if an event already exists (by signature)

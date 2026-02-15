@@ -1,7 +1,8 @@
 use crate::{
     error::{Result, SoltraceError},
-    types::{ParsedIdl, IdlEventDefinition, EventDiscriminator},
+    types::{EventDiscriminator, IdlEventDefinition, ParsedIdl},
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 pub struct IdlParser {
@@ -16,8 +17,8 @@ impl IdlParser {
     }
 
     /// Load an IDL from a JSON file
-    pub async fn load_from_file(&mut self, path: &str) -> Result<()> {
-        let content = tokio::fs::read_to_string(path).await?;
+    pub fn load_from_file(&mut self, path: &str) -> Result<()> {
+        let content = std::fs::read_to_string(path)?;
         let idl: ParsedIdl = serde_json::from_str(&content)
             .map_err(|e| SoltraceError::IdlParse(format!("Failed to parse IDL JSON: {}", e)))?;
 
@@ -48,18 +49,22 @@ impl IdlParser {
     /// Anchor uses: sha256("event:<event_name>")[..8]
     pub fn calculate_discriminator(event_name: &str) -> EventDiscriminator {
         let preimage = format!("event:{}", event_name);
-        let hash = sha2::Sha256::digest(preimage.as_bytes());
+        let hash = Sha256::digest(preimage.as_bytes());
         let mut discriminator = [0u8; 8];
         discriminator.copy_from_slice(&hash[..8]);
         discriminator
     }
 
     /// Find event name by discriminator
-    pub fn find_event_by_discriminator(&self, program_id: &str, discriminator: &[u8]) -> Option<&IdlEventDefinition> {
+    pub fn find_event_by_discriminator(
+        &self,
+        program_id: &str,
+        discriminator: &[u8],
+    ) -> Option<&IdlEventDefinition> {
         let events = self.get_events(program_id)?;
-        events.iter().find(|event| {
-            Self::calculate_discriminator(&event.name).as_slice() == discriminator
-        })
+        events
+            .iter()
+            .find(|event| Self::calculate_discriminator(&event.name).as_slice() == discriminator)
     }
 }
 

@@ -1,13 +1,15 @@
 use anyhow::Result;
 use clap::Parser;
 use solana_client::rpc_client::RpcClient;
-use solana_client::rpc_config::{RpcSignaturesForAddressConfig, RpcTransactionConfig};
+use solana_client::rpc_config::RpcTransactionConfig;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::commitment_config::CommitmentConfig;
 use soltrace_core::{
-    db::Database,
-    event::EventDecoder,
-    idl::IdlParser,
-    utils::{load_idls, process_transaction},
+    Database,
+    EventDecoder,
+    IdlParser,
+    load_idls,
+    process_transaction,
 };
 use std::collections::HashSet;
 use tracing::{info, error, debug, warn};
@@ -121,7 +123,7 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         let account = rpc_client.get_account(&program_id)
             .map_err(|e| anyhow::anyhow!("Failed to fetch account {}: {}", program_id_str, e))?;
 
-        if account.owner == solana_sdk::system_program::id() {
+        if account.owner == solana_sdk::system_program::ID {
             warn!("Program {} is not a program (owner is System Program)", program_id_str);
             continue;
         }
@@ -129,11 +131,12 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         // Get signatures for this program
         info!("Fetching signatures for program {}...", program_id_str);
 
-        let config = RpcSignaturesForAddressConfig {
+        use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
+        let config = GetConfirmedSignaturesForAddress2Config {
             before: None,
             until: None,
-            limit: Some(cli.limit),
-            commitment: Some(solana_sdk::commitment_config::CommitmentConfig::confirmed()),
+            limit: Some(cli.limit as usize),
+            commitment: Some(CommitmentConfig::confirmed()),
         };
 
         let signatures = rpc_client.get_signatures_for_address_with_config(&program_id, config)
@@ -165,7 +168,7 @@ async fn run_backfill(cli: Cli) -> Result<()> {
                 &event_decoder,
                 &db,
                 &mut processed_signatures,
-            ) {
+            ).await {
                 Ok(events_count) => {
                     program_events += events_count;
                     info!("  Processed {} events", events_count);
@@ -201,7 +204,6 @@ async fn process_signature_batch(
     db: &Database,
     processed_signatures: &mut HashSet<String>,
 ) -> Result<usize> {
-    use solana_transaction_status::UiTransactionEncoding;
 
     let mut events_processed = 0;
 
@@ -225,8 +227,8 @@ async fn process_signature_batch(
         let transaction = match rpc_client.get_transaction_with_config(
             &sig,
             RpcTransactionConfig {
-                encoding: Some(UiTransactionEncoding::Json),
-                commitment: Some(solana_sdk::commitment_config::CommitmentConfig::confirmed()),
+                encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                commitment: Some(CommitmentConfig::confirmed()),
                 max_supported_transaction_version: Some(0),
             },
         ) {
@@ -238,7 +240,7 @@ async fn process_signature_batch(
         };
 
         // Process transaction (using shared utility)
-        match process_transaction(transaction, program_id_str, event_decoder, db) {
+        match process_transaction(transaction, program_id_str, event_decoder, db).await {
             Ok(processed) => {
                 events_processed += processed.len();
                 processed_signatures.extend(processed);
