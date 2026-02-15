@@ -1,0 +1,20 @@
+[package]
+name = "soltrace-backfill"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "soltrace-backfill"
+path = "src/main.rs"
+
+[dependencies]
+solana-client = { workspace = true }
+soltrace-core = { path = "../soltrace-core" }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4.0", features = ["derive"] }
+base64 = "0.22"

@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # Soltrace Live - Real-time event indexer
+  soltrace-live:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soltrace-live
+    restart: unless-stopped
+    environment:
+      # Solana RPC Configuration
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}
+      - SOLANA_WS_URL=${SOLANA_WS_URL:-wss://api.mainnet-beta.solana.com}
+
+      # Program to index (comma-separated)
+      - PROGRAM_IDS=${PROGRAM_IDS:-}
+
+      # Database Configuration
+      - DB_URL=${DB_URL:-sqlite:./data/soltrace.db}
+      - IDL_DIR=/idls
+
+      # Indexer Configuration
+      - COMMITMENT=${COMMITMENT:-confirmed}
+      - RECONNECT_DELAY=${RECONNECT_DELAY:-5}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      # SQLite database storage
+      - soltrace-data:/data
+      # IDL files (mount your IDLs here)
+      - ./idls:/idls:ro
+    networks:
+      - soltrace-net
+    command: ["run", \
+               "--programs", "${PROGRAM_IDS}", \
+               "--db-url", "${DB_URL}", \
+               "--idl-dir", "${IDL_DIR}", \
+               "--rpc-url", "${SOLANA_RPC_URL}", \
+               "--ws-url", "${SOLANA_WS_URL}", \
+               "--commitment", "${COMMITMENT}", \
+               "--reconnect-delay", "${RECONNECT_DELAY}"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/data/soltrace.db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Soltrace Backfill - Historical event indexer
+  soltrace-backfill:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soltrace-backfill
+    restart: "no"  # Run once, don't restart
+    environment:
+      # Solana RPC Configuration
+      - SOLANA_RPC_URL=${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}
+
+      # Program to index (comma-separated)
+      - PROGRAM_IDS=${PROGRAM_IDS:-}
+
+      # Database Configuration
+      - DB_URL=${DB_URL:-sqlite:./data/soltrace.db}
+      - IDL_DIR=/idls
+
+      # Backfill Configuration
+      - LIMIT=${LIMIT:-1000}
+      - BATCH_SIZE=${BATCH_SIZE:-100}
+      - BATCH_DELAY=${BATCH_DELAY:-100}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      # SQLite database storage (shared with live indexer)
+      - soltrace-data:/data
+      # IDL files (shared with live indexer)
+      - ./idls:/idls:ro
+    networks:
+      - soltrace-net
+    depends_on:
+      - soltrace-live
+    command: ["soltrace-backfill", \
+               "--programs", "${PROGRAM_IDS}", \
+               "--db-url", "${DB_URL}", \
+               "--idl-dir", "${IDL_DIR}", \
+               "--rpc-url", "${SOLANA_RPC_URL}", \
+               "--limit", "${LIMIT}", \
+               "--batch-size", "${BATCH_SIZE}", \
+               "--batch-delay", "${BATCH_DELAY}"]
+
+networks:
+  soltrace-net:
+    driver: bridge
+
+volumes:
+  # Named volume for database persistence
+  soltrace-data:
+    driver: local
