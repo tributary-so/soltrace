@@ -10,10 +10,13 @@ use soltrace_core::{
     IdlParser,
     load_idls,
     process_transaction,
+    retry_with_rate_limit,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, error, debug, warn};
-use tracing_subscriber;
+use tokio::task;
 
 /// Soltrace Backfill - Historical Solana event indexer
 #[derive(Parser)]
@@ -47,11 +50,27 @@ struct Cli {
     /// Delay between batches (milliseconds)
     #[arg(short, long, default_value = "100")]
     batch_delay: u64,
+
+    /// Number of concurrent transaction fetches
+    #[arg(long, default_value = "10")]
+    concurrency: usize,
+
+    /// Maximum retry attempts for failed requests
+    #[arg(long, default_value = "3")]
+    max_retries: u32,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    // Load .env file if present
+    dotenv::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let cli = Cli::parse();
 
@@ -65,6 +84,8 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     info!("RPC URL: {}", cli.rpc_url);
     info!("Fetching latest {} signatures per program", cli.limit);
     info!("Batch size: {}", cli.batch_size);
+    info!("Concurrency: {}", cli.concurrency);
+    info!("Max retries: {}", cli.max_retries);
 
     // Parse program IDs
     let program_ids: Vec<String> = cli
@@ -85,25 +106,24 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     }
 
     // Initialize database
-    let db = Database::new(&cli.db_url).await?;
+    let db = Arc::new(Database::new(&cli.db_url).await?);
     info!("Database connected: {}", cli.db_url);
 
-    // Load IDLs (using shared utility)
+    // Load IDLs
     let mut idl_parser = IdlParser::new();
     load_idls(&mut idl_parser, &cli.idl_dir).await?;
 
     let loaded_idls = idl_parser.get_idls();
     info!("Loaded {} IDL(s) from {}", loaded_idls.len(), cli.idl_dir);
-
     for (addr, idl) in loaded_idls {
         info!("  - {}: {} events", addr, idl.events.len());
     }
 
     // Create event decoder
-    let event_decoder = EventDecoder::new(idl_parser);
+    let event_decoder = Arc::new(EventDecoder::new(idl_parser));
 
     // Initialize RPC client
-    let rpc_client = RpcClient::new(cli.rpc_url);
+    let rpc_client = Arc::new(RpcClient::new(cli.rpc_url));
 
     // Track processed signatures across all programs
     let mut processed_signatures: HashSet<String> = HashSet::new();
@@ -119,73 +139,64 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         let program_id = program_id_str.parse::<Pubkey>()
             .map_err(|e| anyhow::anyhow!("Invalid program ID {}: {}", program_id_str, e))?;
 
-        // Check if program exists
-        let account = rpc_client.get_account(&program_id)
-            .map_err(|e| anyhow::anyhow!("Failed to fetch account {}: {}", program_id_str, e))?;
+        // Check if program exists with retry
+        let account = retry_with_rate_limit(
+            || async { rpc_client.get_account(&program_id) },
+            cli.max_retries,
+        ).await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch account {}: {}", program_id_str, e))?;
 
         if account.owner == solana_sdk_ids::system_program::ID {
             warn!("Program {} is not a program (owner is System Program)", program_id_str);
             continue;
         }
 
-        // Get signatures for this program
+        // Get signatures for this program with retry
         info!("Fetching signatures for program {}...", program_id_str);
 
         use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
-        let config = GetConfirmedSignaturesForAddress2Config {
-            before: None,
-            until: None,
-            limit: Some(cli.limit as usize),
-            commitment: Some(CommitmentConfig::confirmed()),
-        };
-
-        let signatures = rpc_client.get_signatures_for_address_with_config(&program_id, config)
-            .map_err(|e| anyhow::anyhow!("Failed to get signatures for {}: {}", program_id_str, e))?;
+        let signatures = retry_with_rate_limit(
+            || async {
+                let config = GetConfirmedSignaturesForAddress2Config {
+                    before: None,
+                    until: None,
+                    limit: Some(cli.limit as usize),
+                    commitment: Some(CommitmentConfig::confirmed()),
+                };
+                rpc_client.get_signatures_for_address_with_config(&program_id, config)
+            },
+            cli.max_retries,
+        ).await
+        .map_err(|e| anyhow::anyhow!("Failed to get signatures for {}: {}", program_id_str, e))?;
 
         let signatures_count = signatures.len();
         info!("Found {} signatures", signatures_count);
         total_signatures_fetched += signatures_count;
 
-        // Process signatures in batches
-        let mut batch_start = 0;
-        let mut program_events = 0;
+        // Process signatures with concurrency
+        let signature_strings: Vec<String> = signatures
+            .iter()
+            .map(|sig| sig.signature.clone())
+            .filter(|sig| !processed_signatures.contains(sig))
+            .collect();
 
-        while batch_start < signatures_count {
-            let batch_end = (batch_start + cli.batch_size).min(signatures_count);
-            info!("Processing batch {} to {} of {} signatures",
-                  batch_start + 1, batch_end, signatures_count);
-
-            let batch_signatures: Vec<_> = signatures[batch_start..batch_end]
-                .iter()
-                .map(|sig| sig.signature.clone())
-                .collect();
-
-            // Fetch transactions in batch
-            match process_signature_batch(
-                &rpc_client,
-                &batch_signatures,
-                program_id_str,
-                &event_decoder,
-                &db,
-                &mut processed_signatures,
-            ).await {
-                Ok(events_count) => {
-                    program_events += events_count;
-                    info!("  Processed {} events", events_count);
-                }
-                Err(e) => {
-                    error!("  Batch failed: {}", e);
-                }
-            }
-
-            batch_start = batch_end;
-
-            // Add delay between batches
-            tokio::time::sleep(tokio::time::Duration::from_millis(cli.batch_delay)).await;
-        }
+        let program_id_for_processing = program_id_str.clone();
+        let program_events = process_signatures_concurrent(
+            rpc_client.clone(),
+            signature_strings,
+            program_id_for_processing,
+            event_decoder.clone(),
+            db.clone(),
+            &mut processed_signatures,
+            cli.concurrency,
+            cli.max_retries,
+        ).await?;
 
         total_events_processed += program_events;
         info!("Program {} complete: {} events processed", program_id_str, program_events);
+
+        // Delay between programs to avoid rate limiting
+        tokio::time::sleep(Duration::from_millis(cli.batch_delay)).await;
     }
 
     info!("\nBackfill complete!");
@@ -196,60 +207,119 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-async fn process_signature_batch(
-    rpc_client: &RpcClient,
-    signatures: &[String],
-    program_id_str: &str,
-    event_decoder: &EventDecoder,
-    db: &Database,
+async fn process_signatures_concurrent(
+    rpc_client: Arc<RpcClient>,
+    signatures: Vec<String>,
+    program_id_str: String,
+    event_decoder: Arc<EventDecoder>,
+    db: Arc<Database>,
     processed_signatures: &mut HashSet<String>,
+    concurrency: usize,
+    max_retries: u32,
 ) -> Result<usize> {
+    let total = signatures.len();
+    let mut processed_count = 0;
+    let mut events_count = 0;
 
-    let mut events_processed = 0;
+    // Process signatures in chunks to avoid overwhelming the RPC
+    for chunk in signatures.chunks(concurrency * 2) {
+        let mut handles = Vec::new();
 
-    // Fetch transactions
-    for signature in signatures {
-        // Skip if already processed
-        if processed_signatures.contains(signature) {
-            continue;
+        for signature in chunk.iter() {
+            let rpc_client = rpc_client.clone();
+            let program_id_str = program_id_str.clone();
+            let event_decoder = event_decoder.clone();
+            let db = db.clone();
+            let sig_for_task = signature.clone();
+
+            let handle = task::spawn(async move {
+                process_single_signature(
+                    &rpc_client,
+                    &sig_for_task,
+                    &program_id_str,
+                    &event_decoder,
+                    &db,
+                    max_retries,
+                ).await
+            });
+
+            handles.push((signature.clone(), handle));
         }
 
-        // Parse signature
-        let sig = match signature.parse::<solana_sdk::signature::Signature>() {
-            Ok(sig) => sig,
-            Err(e) => {
-                debug!("Failed to parse signature {}: {}", signature, e);
-                continue;
+        // Wait for all tasks in this chunk
+        for (signature, handle) in handles {
+            processed_count += 1;
+            
+            match handle.await {
+                Ok(Ok(event_count)) => {
+                    events_count += event_count;
+                    processed_signatures.insert(signature);
+                }
+                Ok(Err(e)) => {
+                    debug!("Failed to process signature {}: {}", signature, e);
+                }
+                Err(e) => {
+                    error!("Task panicked for signature {}: {}", signature, e);
+                }
             }
-        };
+        }
 
-        // Fetch transaction
-        let transaction = match rpc_client.get_transaction_with_config(
-            &sig,
-            RpcTransactionConfig {
-                encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
-                commitment: Some(CommitmentConfig::confirmed()),
-                max_supported_transaction_version: Some(0),
-            },
-        ) {
-            Ok(tx) => tx,
-            Err(e) => {
-                debug!("Failed to fetch transaction {}: {}", signature, e);
-                continue;
-            }
-        };
-
-        // Process transaction (using shared utility)
-        match process_transaction(transaction, program_id_str, event_decoder, db).await {
-            Ok(processed) => {
-                events_processed += processed.len();
-                processed_signatures.extend(processed);
-            }
-            Err(e) => {
-                debug!("Failed to process transaction {}: {}", signature, e);
-            }
+        // Progress update every 100 signatures
+        if processed_count % 100 == 0 || processed_count >= total {
+            info!("Progress: {}/{} signatures processed, {} events found", 
+                  processed_count, total, events_count);
         }
     }
 
-    Ok(events_processed)
+    Ok(events_count)
+}
+
+async fn process_single_signature(
+    rpc_client: &RpcClient,
+    signature: &str,
+    program_id_str: &str,
+    event_decoder: &EventDecoder,
+    db: &Database,
+    max_retries: u32,
+) -> Result<usize> {
+    // Parse signature
+    let sig = signature.parse::<solana_sdk::signature::Signature>()
+        .map_err(|e| anyhow::anyhow!("Invalid signature: {}", e))?;
+
+    // Fetch transaction with retry
+    let transaction = retry_with_rate_limit(
+        || async {
+            rpc_client.get_transaction_with_config(
+                &sig,
+                RpcTransactionConfig {
+                    encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                    commitment: Some(CommitmentConfig::confirmed()),
+                    max_supported_transaction_version: Some(0),
+                },
+            )
+        },
+        max_retries,
+    ).await
+    .map_err(|e| anyhow::anyhow!("Failed to fetch transaction: {}", e))?;
+
+    // Process transaction
+    match process_transaction(transaction, program_id_str, event_decoder, db).await {
+        Ok(processed) => Ok(processed.len()),
+        Err(e) => Err(anyhow::anyhow!("Failed to process transaction: {}", e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_program_parsing() {
+        let programs = "Prog1,Prog2,Prog3";
+        let parsed: Vec<String> = programs
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0], "Prog1");
+    }
 }

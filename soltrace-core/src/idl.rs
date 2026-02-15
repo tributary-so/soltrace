@@ -5,6 +5,7 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct IdlParser {
     idls: HashMap<String, ParsedIdl>, // program_id -> ParsedIdl
 }

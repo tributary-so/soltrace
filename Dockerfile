@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Soltrace
 # Stage 1: Builder - Compiles Rust binaries
-FROM docker.io/library/rust:1.75-bookworm AS builder
+FROM docker.io/library/rust:1.88-bookworm AS builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -73,13 +73,13 @@ ENTRYPOINT ["/app/soltrace-live"]
 
 # Default command (can be overridden)
 CMD ["run", \
-     "--programs", "${PROGRAM_IDS}", \
-     "--db-url", "${DB_URL}", \
-     "--idl-dir", "${IDL_DIR}", \
-     "--rpc-url", "${SOLANA_RPC_URL}", \
-     "--ws-url", "${SOLANA_WS_URL}", \
-     "--commitment", "${COMMITMENT}", \
-     "--reconnect-delay", "${RECONNECT_DELAY}"]
+    "--programs", "${PROGRAM_IDS}", \
+    "--db-url", "${DB_URL}", \
+    "--idl-dir", "${IDL_DIR}", \
+    "--rpc-url", "${SOLANA_RPC_URL}", \
+    "--ws-url", "${SOLANA_WS_URL}", \
+    "--commitment", "${COMMITMENT}", \
+    "--reconnect-delay", "${RECONNECT_DELAY}"]
 
 # Metadata
 LABEL maintainer="Fabian Schuh <fabian@example.com>"

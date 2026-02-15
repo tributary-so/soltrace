@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 solana-client = { workspace = true }
 solana-sdk = { workspace = true }
+solana-pubsub-client = "3.1"
 solana-transaction-status = { workspace = true }
 solana-commitment-config = "3.1"
 solana-sdk-ids = "3.1"
@@ -19,9 +20,10 @@ sqlx = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 clap = { version = "4.0", features = ["derive"] }
 futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+dotenv = "0.15"

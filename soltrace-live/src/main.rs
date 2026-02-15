@@ -1,21 +1,24 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use solana_client::rpc_client::RpcClient;
-use solana_client::rpc_config::RpcTransactionLogsConfig;
 use solana_sdk::pubkey::Pubkey;
+use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
+use solana_client::rpc_config::{RpcTransactionLogsFilter, RpcTransactionLogsConfig};
 use solana_commitment_config::CommitmentConfig;
 use soltrace_core::{
     Database,
     EventDecoder,
     IdlParser,
     load_idls,
-    extract_event_from_log,
+    utils::extract_event_from_log,
     types::RawEvent,
 };
 use std::collections::HashSet;
-use tracing::{info, error, debug, warn};
-use tracing_subscriber;
-use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{info, error, debug};
+use tokio::sync::mpsc;
+use tokio::time::{sleep, timeout};
+use futures::StreamExt;
 
 /// Soltrace Live - Real-time Solana event indexer via WebSocket
 #[derive(Parser)]
@@ -29,7 +32,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize database
-    Init,
+    Init {
+        /// Database URL
+        #[arg(short, long, default_value = "sqlite:./soltrace.db")]
+        db_url: String,
+    },
     /// Start real-time event indexing
     Run {
         /// Solana RPC WebSocket URL
@@ -55,18 +62,33 @@ enum Commands {
         /// Log commitment level (processed, confirmed, finalized)
         #[arg(short, long, default_value = "confirmed")]
         commitment: String,
+
+        /// Reconnect delay in seconds
+        #[arg(long, default_value = "5")]
+        reconnect_delay: u64,
+
+        /// Maximum number of reconnection attempts (0 = infinite)
+        #[arg(long, default_value = "0")]
+        max_reconnects: u32,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env file if present
+    dotenv::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let cli = Cli::parse();
 
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
-
     match cli.command {
-        Commands::Init => init_db().await?,
+        Commands::Init { db_url } => init_db(&db_url).await?,
         Commands::Run {
             ws_url,
             rpc_url,
@@ -74,19 +96,30 @@ async fn main() -> Result<()> {
             db_url,
             idl_dir,
             commitment,
+            reconnect_delay,
+            max_reconnects,
         } => {
-            run_indexer(ws_url, rpc_url, programs, db_url, idl_dir, commitment).await?;
+            run_indexer(
+                ws_url,
+                rpc_url,
+                programs,
+                db_url,
+                idl_dir,
+                commitment,
+                reconnect_delay,
+                max_reconnects,
+            ).await?;
         }
     }
 
     Ok(())
 }
 
-async fn init_db() -> Result<()> {
+async fn init_db(db_url: &str) -> Result<()> {
     info!("Initializing database...");
 
-    let _db = Database::new("sqlite:./soltrace.db").await?;
-    info!("Database initialized successfully at: ./soltrace.db");
+    let _db = Database::new(db_url).await?;
+    info!("Database initialized successfully at: {}", db_url);
 
     Ok(())
 }
@@ -98,13 +131,16 @@ async fn run_indexer(
     db_url: String,
     idl_dir: String,
     commitment: String,
+    reconnect_delay: u64,
+    max_reconnects: u32,
 ) -> Result<()> {
     info!("Starting Soltrace Live indexer");
     info!("RPC URL: {}", rpc_url);
     info!("WebSocket URL: {}", ws_url);
     info!("Commitment: {}", commitment);
+    info!("Reconnect delay: {}s", reconnect_delay);
 
-    // Parse program IDs
+    // Parse and validate program IDs
     let program_ids: Vec<Pubkey> = programs
         .split(',')
         .map(|s| s.trim())
@@ -123,84 +159,70 @@ async fn run_indexer(
         info!("  - {}", pid);
     }
 
-    // Validate program IDs via HTTP RPC
-    validate_programs(&rpc_url, &program_ids).await?;
-
     // Initialize database
-    let db = Database::new(&db_url).await?;
+    let db = Arc::new(Database::new(&db_url).await?);
     info!("Database connected: {}", db_url);
 
-    // Load IDLs (using shared utility)
+    // Load IDLs
     let mut idl_parser = IdlParser::new();
     load_idls(&mut idl_parser, &idl_dir).await?;
 
     let loaded_idls = idl_parser.get_idls();
     info!("Loaded {} IDL(s) from {}", loaded_idls.len(), idl_dir);
-
     for (addr, idl) in loaded_idls {
         info!("  - {}: {} events", addr, idl.events.len());
     }
 
     // Create event decoder
-    let event_decoder = EventDecoder::new(idl_parser);
+    let event_decoder = Arc::new(EventDecoder::new(idl_parser));
 
-    // Track processed signatures (placeholder for future use)
-    let _processed_signatures: HashSet<String> = HashSet::new();
+    // Track processed signatures to avoid duplicates
+    let processed_signatures = Arc::new(tokio::sync::Mutex::new(HashSet::<String>::new()));
 
     // Start WebSocket subscription with auto-reconnect
     run_websocket_loop(
         &ws_url,
         &program_ids,
-        &event_decoder,
-        &db,
+        event_decoder,
+        db,
         &commitment,
-        _processed_signatures,
+        reconnect_delay,
+        max_reconnects,
+        processed_signatures,
     ).await?;
 
-    Ok(())
-}
-
-async fn validate_programs(rpc_url: &str, program_ids: &[Pubkey]) -> Result<()> {
-    use solana_client::rpc_client::RpcClient;
-
-    let rpc_client = RpcClient::new(rpc_url.to_string());
-
-    for program_id in program_ids {
-        match rpc_client.get_account(program_id) {
-            Ok(account) => {
-                if account.owner == solana_sdk_ids::system_program::ID {
-                    warn!("Program {} is not a program (owner is System Program)", program_id);
-                }
-            }
-            Err(e) => {
-                error!("Failed to fetch account {}: {}", program_id, e);
-            }
-        }
-    }
-
-    info!("All program IDs validated");
     Ok(())
 }
 
 async fn run_websocket_loop(
     ws_url: &str,
     program_ids: &[Pubkey],
-    event_decoder: &EventDecoder,
-    db: &Database,
+    event_decoder: Arc<EventDecoder>,
+    db: Arc<Database>,
     commitment: &str,
-    _processed_signatures: HashSet<String>,
+    reconnect_delay: u64,
+    max_reconnects: u32,
+    processed_signatures: Arc<tokio::sync::Mutex<HashSet<String>>>,
 ) -> Result<()> {
-    let mut reconnect_count = 0;
+    let mut reconnect_count: u32 = 0;
+    let program_ids_vec: Vec<_> = program_ids.iter().map(|p| p.to_string()).collect();
 
     loop {
+        if max_reconnects > 0 && reconnect_count >= max_reconnects {
+            error!("Maximum reconnection attempts ({}) reached. Exiting.", max_reconnects);
+            return Err(anyhow::anyhow!("Max reconnections exceeded"));
+        }
+
         info!("\nConnecting to WebSocket (attempt {})...", reconnect_count + 1);
 
         match websocket_handler(
             ws_url,
             program_ids,
-            event_decoder,
-            db,
+            &program_ids_vec,
+            event_decoder.clone(),
+            db.clone(),
             commitment,
+            processed_signatures.clone(),
         ).await {
             Ok(_) => {
                 info!("WebSocket connection closed normally");
@@ -209,9 +231,16 @@ async fn run_websocket_loop(
             Err(e) => {
                 error!("WebSocket error: {}", e);
                 reconnect_count += 1;
-                info!("Reconnecting in 5 seconds...");
-
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                
+                let delay = if reconnect_count > 10 {
+                    // Cap exponential backoff at ~17 minutes
+                    Duration::from_secs(60 * 15)
+                } else {
+                    Duration::from_secs(reconnect_delay * 2u64.pow(reconnect_count.min(10)))
+                };
+                
+                info!("Reconnecting in {:?}...", delay);
+                sleep(delay).await;
             }
         }
     }
@@ -220,21 +249,112 @@ async fn run_websocket_loop(
 }
 
 async fn websocket_handler(
-    _ws_url: &str,
+    ws_url: &str,
     program_ids: &[Pubkey],
-    _event_decoder: &EventDecoder,
-    _db: &Database,
-    _commitment: &str,
+    program_ids_str: &[String],
+    event_decoder: Arc<EventDecoder>,
+    db: Arc<Database>,
+    commitment: &str,
+    _processed_signatures: Arc<tokio::sync::Mutex<HashSet<String>>>,
 ) -> Result<()> {
-    info!("WebSocket handler stub - full implementation pending");
+    info!("Connecting to WebSocket at: {}", ws_url);
     info!("Monitoring {} program(s):", program_ids.len());
     for pid in program_ids {
         info!("  - {}", pid);
     }
+
+    // Parse commitment config
+    let commitment_config = parse_commitment(commitment)?;
+
+    // Create PubsubClient
+    let pubsub_client = PubsubClient::new(ws_url).await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to WebSocket: {}", e))?;
+
+    info!("WebSocket connected successfully");
+
+    // Subscribe to logs for the specified programs
+    let filter = RpcTransactionLogsFilter::Mentions(program_ids_str.to_vec());
+    let logs_config = RpcTransactionLogsConfig {
+        commitment: Some(commitment_config),
+    };
     
-    // Stub implementation - just sleep indefinitely
-    loop {
-        sleep(Duration::from_secs(60)).await;
+    let (mut notifications, unsubscribe) = pubsub_client
+        .logs_subscribe(filter, logs_config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to subscribe to logs: {}", e))?;
+
+    info!("Successfully subscribed to program logs");
+
+    // Create channel for processing logs asynchronously
+    let (tx, mut rx) = mpsc::channel::<solana_client::rpc_response::RpcLogsResponse>(100);
+    let db_clone = db.clone();
+    let event_decoder_clone = event_decoder.clone();
+    let program_ids_clone: Vec<_> = program_ids.to_vec();
+
+    // Spawn processing task
+    let processor_handle = tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            match process_logs_message(
+                message,
+                &program_ids_clone,
+                &event_decoder_clone,
+                &db_clone,
+            ).await {
+                Ok(count) => {
+                    if count > 0 {
+                        debug!("Processed {} events", count);
+                    }
+                }
+                Err(e) => {
+                    error!("Error processing logs message: {}", e);
+                }
+            }
+        }
+    });
+
+    // Main loop: receive notifications and send to processor
+    let result: Result<()> = async {
+        loop {
+            match timeout(Duration::from_secs(60), notifications.next()).await {
+                Ok(Some(response)) => {
+                    // Response is Response<RpcLogsResponse>, extract the value
+                    if let Err(e) = tx.send(response.value).await {
+                        error!("Failed to send log to processor: {}", e);
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    info!("WebSocket stream ended");
+                    break;
+                }
+                Err(_) => {
+                    // Timeout - connection is still alive but no messages
+                    debug!("No messages received in 60 seconds, connection still alive");
+                }
+            }
+        }
+        Ok(())
+    }.await;
+
+    // Cleanup
+    drop(tx);
+    let _ = processor_handle.await;
+    
+    // Unsubscribe
+    unsubscribe().await;
+
+    result
+}
+
+fn parse_commitment(commitment: &str) -> Result<CommitmentConfig> {
+    match commitment.to_lowercase().as_str() {
+        "processed" => Ok(CommitmentConfig::processed()),
+        "confirmed" => Ok(CommitmentConfig::confirmed()),
+        "finalized" => Ok(CommitmentConfig::finalized()),
+        _ => Err(anyhow::anyhow!(
+            "Invalid commitment level: {}. Use 'processed', 'confirmed', or 'finalized'",
+            commitment
+        )),
     }
 }
 
@@ -271,7 +391,7 @@ async fn process_logs_message(
                             signature: signature.clone(),
                             program_id: *program_id,
                             log: log.clone(),
-                            timestamp: Utc::now(), // Will use block time if available
+                            timestamp: Utc::now(),
                         };
 
                         // Store event
@@ -281,7 +401,8 @@ async fn process_logs_message(
                                 events_found += 1;
                             }
                             Err(e) => {
-                                if e.to_string().contains("UNIQUE constraint") {
+                                let err_str = e.to_string();
+                                if err_str.contains("UNIQUE constraint") || err_str.contains("duplicate") {
                                     debug!("Event {} already exists, skipping", signature);
                                 } else {
                                     error!("Failed to store event: {}", e);
@@ -306,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_program_id_parsing() {
-        let programs = "11111111111111111111111111111111111,tokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        let programs = "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
         let parsed: Vec<String> = programs
             .split(',')
             .map(|s| s.trim().to_string())
@@ -314,6 +435,14 @@ mod tests {
             .collect();
 
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0], "11111111111111111111111111111111111");
+        assert_eq!(parsed[0], "11111111111111111111111111111111");
+    }
+
+    #[test]
+    fn test_parse_commitment() {
+        assert!(parse_commitment("confirmed").is_ok());
+        assert!(parse_commitment("processed").is_ok());
+        assert!(parse_commitment("finalized").is_ok());
+        assert!(parse_commitment("invalid").is_err());
     }
 }

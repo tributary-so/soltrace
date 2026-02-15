@@ -20,6 +20,7 @@ pub struct EventRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Clone)]
 pub struct Database {
     pool: sqlx::sqlite::SqlitePool,
 }

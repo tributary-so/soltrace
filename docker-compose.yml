@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   # Soltrace Live - Real-time event indexer
@@ -33,14 +33,15 @@ services:
       - ./idls:/idls:ro
     networks:
       - soltrace-net
-    command: ["run", \
-               "--programs", "${PROGRAM_IDS}", \
-               "--db-url", "${DB_URL}", \
-               "--idl-dir", "${IDL_DIR}", \
-               "--rpc-url", "${SOLANA_RPC_URL}", \
-               "--ws-url", "${SOLANA_WS_URL}", \
-               "--commitment", "${COMMITMENT}", \
-               "--reconnect-delay", "${RECONNECT_DELAY}"]
+    command: >
+      run
+      --programs "${PROGRAM_IDS}"
+      --db-url "${DB_URL}"
+      --idl-dir "${IDL_DIR}"
+      --rpc-url "${SOLANA_RPC_URL}"
+      --ws-url "${SOLANA_WS_URL}"
+      --commitment "${COMMITMENT}"
+      --reconnect-delay "${RECONNECT_DELAY}"
     healthcheck:
       test: ["CMD", "test", "-f", "/data/soltrace.db"]
       interval: 30s
@@ -54,7 +55,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: soltrace-backfill
-    restart: "no"  # Run once, don't restart
+    restart: "no" # Run once, don't restart
     environment:
       # Solana RPC Configuration
       - SOLANA_RPC_URL=${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}
@@ -82,14 +83,15 @@ services:
       - soltrace-net
     depends_on:
       - soltrace-live
-    command: ["soltrace-backfill", \
-               "--programs", "${PROGRAM_IDS}", \
-               "--db-url", "${DB_URL}", \
-               "--idl-dir", "${IDL_DIR}", \
-               "--rpc-url", "${SOLANA_RPC_URL}", \
-               "--limit", "${LIMIT}", \
-               "--batch-size", "${BATCH_SIZE}", \
-               "--batch-delay", "${BATCH_DELAY}"]
+    entrypoint: ["/app/soltrace-backfill"]
+    command: >
+      --programs "${PROGRAM_IDS}"
+      --db-url "${DB_URL}"
+      --idl-dir "${IDL_DIR}"
+      --rpc-url "${SOLANA_RPC_URL}"
+      --limit "${LIMIT}"
+      --batch-size "${BATCH_SIZE}"
+      --batch-delay "${BATCH_DELAY}"
 
 networks:
   soltrace-net:
