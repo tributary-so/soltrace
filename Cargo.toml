@@ -3,18 +3,22 @@ members = ["soltrace-core", "soltrace-live", "soltrace-backfill"]
 resolver = "2"
 
 [workspace.dependencies]
-solana-client = "1.18"
-solana-sdk = "1.18"
-solana-account-decoder = "1.18"
-solana-transaction-status = "1.18"
+solana-client = "3.1"
+solana-sdk = "4.0"
+solana-account-decoder = "3.1"
+solana-transaction-status = "3.1"
 anchor-lang = "0.31.1"
 anchor-client = "0.31.1"
 borsh = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
-sqlx = { version = "0.6", features = ["sqlite", "runtime-tokio-rustls", "chrono"] }
-chrono = "0.4"
+sqlx = { version = "0.8", features = [
+    "sqlite",
+    "runtime-tokio-rustls",
+    "chrono",
+] }
+chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 thiserror = "1.0"
 tracing = "0.1"

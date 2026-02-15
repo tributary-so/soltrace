@@ -11,6 +11,8 @@ path = "src/main.rs"
 solana-client = { workspace = true }
 solana-sdk = { workspace = true }
 solana-transaction-status = { workspace = true }
+solana-commitment-config = "3.1"
+solana-sdk-ids = "3.1"
 soltrace-core = { path = "../soltrace-core" }
 tokio = { workspace = true }
 sqlx = { workspace = true }

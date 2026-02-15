@@ -3,7 +3,7 @@ use clap::Parser;
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcTransactionConfig;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_commitment_config::CommitmentConfig;
 use soltrace_core::{
     Database,
     EventDecoder,
@@ -123,7 +123,7 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         let account = rpc_client.get_account(&program_id)
             .map_err(|e| anyhow::anyhow!("Failed to fetch account {}: {}", program_id_str, e))?;
 
-        if account.owner == solana_sdk::system_program::ID {
+        if account.owner == solana_sdk_ids::system_program::ID {
             warn!("Program {} is not a program (owner is System Program)", program_id_str);
             continue;
         }

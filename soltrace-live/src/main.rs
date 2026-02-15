@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcTransactionLogsConfig;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::commitment_config::CommitmentConfig;
+use solana_commitment_config::CommitmentConfig;
 use soltrace_core::{
     Database,
     EventDecoder,
@@ -168,7 +168,7 @@ async fn validate_programs(rpc_url: &str, program_ids: &[Pubkey]) -> Result<()> 
     for program_id in program_ids {
         match rpc_client.get_account(program_id) {
             Ok(account) => {
-                if account.owner == solana_sdk::system_program::ID {
+                if account.owner == solana_sdk_ids::system_program::ID {
                     warn!("Program {} is not a program (owner is System Program)", program_id);
                 }
             }
