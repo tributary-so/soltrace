@@ -1,4 +1,5 @@
 use crate::{
+    borsh_decoder::BorshDecoder,
     error::{Result, SoltraceError},
     idl::IdlParser,
     types::{DecodedEvent, IdlEventDefinition},
@@ -51,23 +52,23 @@ impl EventDecoder {
     }
 
     /// Decode event data using borsh deserialization
-    ///
-    /// For now, we'll use a simple approach that treats the data as raw bytes
-    /// and provides a hex representation. Full type-aware decoding would require
-    /// more complex logic.
     fn decode_event_data(
         &self,
-        _event_def: &IdlEventDefinition,
+        event_def: &IdlEventDefinition,
         data: &[u8],
     ) -> Result<serde_json::Value> {
-        // For the proof of concept, return hex-encoded data
-        // In production, this would use borsh to deserialize based on IDL types
-        let hex = hex::encode_upper(data);
-
-        Ok(serde_json::json!({
-            "hex": hex,
-            "length": data.len(),
-        }))
+        // Try to decode using the IDL field definitions
+        match BorshDecoder::decode_event_data(data, &event_def.fields) {
+            Ok(decoded) => Ok(decoded),
+            Err(_) => {
+                // Fallback to hex encoding if decoding fails
+                let hex = hex::encode_upper(data);
+                Ok(serde_json::json!({
+                    "hex": hex,
+                    "length": data.len(),
+                }))
+            }
+        }
     }
 }
 

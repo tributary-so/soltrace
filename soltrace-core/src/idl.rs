@@ -2,7 +2,7 @@ use crate::{
     error::{Result, SoltraceError},
     types::{EventDiscriminator, IdlEventDefinition, ParsedIdl},
 };
-use sha2::{Digest, Sha256};
+use anchor_lang::solana_program::hash::hash;
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -50,9 +50,9 @@ impl IdlParser {
     /// Anchor uses: sha256("event:<event_name>")[..8]
     pub fn calculate_discriminator(event_name: &str) -> EventDiscriminator {
         let preimage = format!("event:{}", event_name);
-        let hash = Sha256::digest(preimage.as_bytes());
+        let hash = hash(preimage.as_bytes());
         let mut discriminator = [0u8; 8];
-        discriminator.copy_from_slice(&hash[..8]);
+        discriminator.copy_from_slice(&hash.to_bytes()[..8]);
         discriminator
     }
 
