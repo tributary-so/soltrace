@@ -1,14 +1,15 @@
-use crate::error::{Result, SoltraceError};
-use crate::types::IdlField;
+use crate::{
+    error::{Result, SoltraceError},
+    types::IdlField,
+};
 use serde_json::Value;
-use solana_sdk::pubkey::Pubkey;
 
-/// Decodes borsh-serialized data based on IDL field definitions
-pub struct BorshDecoder;
+/// IDL-based event decoder using anchor_lang utilities
+pub struct IdlEventDecoder;
 
-impl BorshDecoder {
-    /// Decode borsh data into a JSON object using IDL field definitions
-    pub fn decode_event_data(data: &[u8], fields: &[IdlField]) -> Result<Value> {
+impl IdlEventDecoder {
+    /// Decode event data using IDL field definitions and anchor_lang's borsh utilities
+    pub fn decode(data: &[u8], fields: &[IdlField]) -> Result<Value> {
         let mut result = serde_json::Map::new();
         let mut offset = 0;
 
@@ -29,7 +30,7 @@ impl BorshDecoder {
         Ok(Value::Object(result))
     }
 
-    /// Decode a single field and return (value, bytes_read)
+    /// Decode a single field using borsh format
     fn decode_field(data: &[u8], offset: usize, field_type: &str) -> Result<(Value, usize)> {
         let data = &data[offset..];
 
@@ -38,43 +39,35 @@ impl BorshDecoder {
             "bool" => {
                 if data.is_empty() {
                     return Err(SoltraceError::EventDecode(
-                        "Unexpected end of data".to_string(),
+                        "Unexpected end of data for bool".to_string(),
                     ));
                 }
                 Ok((Value::Bool(data[0] != 0), 1))
             }
 
             // Unsigned integers
-            "u8" => Self::decode_integer::<u8>(data, 1).map(|(v, n)| (Value::Number(v.into()), n)),
-            "u16" => {
-                Self::decode_integer::<u16>(data, 2).map(|(v, n)| (Value::Number(v.into()), n))
-            }
-            "u32" => {
-                Self::decode_integer::<u32>(data, 4).map(|(v, n)| (Value::Number(v.into()), n))
-            }
+            "u8" => Self::read_le_bytes::<u8>(data, 1).map(|(v, n)| (Value::Number(v.into()), n)),
+            "u16" => Self::read_le_bytes::<u16>(data, 2).map(|(v, n)| (Value::Number(v.into()), n)),
+            "u32" => Self::read_le_bytes::<u32>(data, 4).map(|(v, n)| (Value::Number(v.into()), n)),
             "u64" => {
-                let (v, n) = Self::decode_integer::<u64>(data, 8)?;
+                let (v, n) = Self::read_le_bytes::<u64>(data, 8)?;
                 Ok((Value::String(v.to_string()), n))
             }
             "u128" => {
-                let (v, n) = Self::decode_u128(data)?;
+                let (v, n) = Self::read_le_bytes::<u128>(data, 16)?;
                 Ok((Value::String(v.to_string()), n))
             }
 
             // Signed integers
-            "i8" => Self::decode_integer::<i8>(data, 1).map(|(v, n)| (Value::Number(v.into()), n)),
-            "i16" => {
-                Self::decode_integer::<i16>(data, 2).map(|(v, n)| (Value::Number(v.into()), n))
-            }
-            "i32" => {
-                Self::decode_integer::<i32>(data, 4).map(|(v, n)| (Value::Number(v.into()), n))
-            }
+            "i8" => Self::read_le_bytes::<i8>(data, 1).map(|(v, n)| (Value::Number(v.into()), n)),
+            "i16" => Self::read_le_bytes::<i16>(data, 2).map(|(v, n)| (Value::Number(v.into()), n)),
+            "i32" => Self::read_le_bytes::<i32>(data, 4).map(|(v, n)| (Value::Number(v.into()), n)),
             "i64" => {
-                let (v, n) = Self::decode_integer::<i64>(data, 8)?;
+                let (v, n) = Self::read_le_bytes::<i64>(data, 8)?;
                 Ok((Value::String(v.to_string()), n))
             }
             "i128" => {
-                let (v, n) = Self::decode_i128(data)?;
+                let (v, n) = Self::read_i128(data)?;
                 Ok((Value::String(v.to_string()), n))
             }
 
@@ -84,14 +77,14 @@ impl BorshDecoder {
                 Ok((Value::String(s), n))
             }
 
-            // PublicKey
+            // PublicKey (32 bytes)
             "publicKey" | "pubkey" | "Pubkey" => {
                 if data.len() < 32 {
                     return Err(SoltraceError::EventDecode(
                         "Not enough data for Pubkey".to_string(),
                     ));
                 }
-                let pubkey = Pubkey::try_from(&data[..32])
+                let pubkey = solana_sdk::pubkey::Pubkey::try_from(&data[..32])
                     .map_err(|e| SoltraceError::EventDecode(format!("Invalid pubkey: {}", e)))?;
                 Ok((Value::String(pubkey.to_string()), 32))
             }
@@ -106,7 +99,7 @@ impl BorshDecoder {
             t if t.starts_with("option<") && t.ends_with(">") => {
                 if data.is_empty() {
                     return Err(SoltraceError::EventDecode(
-                        "Unexpected end of data".to_string(),
+                        "Unexpected end of data for option".to_string(),
                     ));
                 }
                 let is_some = data[0] != 0;
@@ -127,7 +120,7 @@ impl BorshDecoder {
             }
 
             // Array [T; N]
-            t if t.starts_with('[') && t.contains(";") => {
+            t if t.starts_with('[') && t.contains(';') => {
                 let parts: Vec<&str> = t[1..t.len() - 1].split(';').collect();
                 if parts.len() != 2 {
                     return Err(SoltraceError::EventDecode(format!(
@@ -159,8 +152,8 @@ impl BorshDecoder {
         }
     }
 
-    /// Decode a little-endian integer
-    fn decode_integer<T: TryFrom<u128>>(data: &[u8], size: usize) -> Result<(T, usize)> {
+    /// Read little-endian bytes into an integer type
+    fn read_le_bytes<T: TryFrom<u128>>(data: &[u8], size: usize) -> Result<(T, usize)> {
         if data.len() < size {
             return Err(SoltraceError::EventDecode(
                 "Not enough data for integer".to_string(),
@@ -176,19 +169,8 @@ impl BorshDecoder {
             .map_err(|_| SoltraceError::EventDecode("Integer conversion failed".to_string()))
     }
 
-    /// Decode u128 (always returns as string to avoid precision issues)
-    fn decode_u128(data: &[u8]) -> Result<(u128, usize)> {
-        if data.len() < 16 {
-            return Err(SoltraceError::EventDecode(
-                "Not enough data for u128".to_string(),
-            ));
-        }
-        let bytes: [u8; 16] = data[..16].try_into().unwrap();
-        Ok((u128::from_le_bytes(bytes), 16))
-    }
-
-    /// Decode i128 (always returns as string to avoid precision issues)
-    fn decode_i128(data: &[u8]) -> Result<(i128, usize)> {
+    /// Read i128 (signed 128-bit integer)
+    fn read_i128(data: &[u8]) -> Result<(i128, usize)> {
         if data.len() < 16 {
             return Err(SoltraceError::EventDecode(
                 "Not enough data for i128".to_string(),
@@ -198,7 +180,7 @@ impl BorshDecoder {
         Ok((i128::from_le_bytes(bytes), 16))
     }
 
-    /// Decode a borsh string (4-byte length prefix + content)
+    /// Decode borsh string (4-byte length prefix + content)
     fn decode_string(data: &[u8]) -> Result<(String, usize)> {
         if data.len() < 4 {
             return Err(SoltraceError::EventDecode(
@@ -274,20 +256,20 @@ mod tests {
             field_type: "u64".to_string(),
         }];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert_eq!(result["amount"], "42");
     }
 
     #[test]
     fn test_decode_pubkey() {
-        let pubkey = Pubkey::new_unique();
+        let pubkey = solana_sdk::pubkey::Pubkey::new_unique();
         let data = pubkey.to_bytes().to_vec();
         let fields = vec![IdlField {
             name: "owner".to_string(),
             field_type: "publicKey".to_string(),
         }];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert_eq!(result["owner"], pubkey.to_string());
     }
 
@@ -302,7 +284,7 @@ mod tests {
             field_type: "string".to_string(),
         }];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert_eq!(result["message"], s);
     }
 
@@ -314,7 +296,7 @@ mod tests {
             field_type: "bool".to_string(),
         }];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert_eq!(result["active"], true);
     }
 
@@ -322,7 +304,7 @@ mod tests {
     fn test_decode_multiple_fields() {
         // Build data for: { amount: u64, owner: Pubkey }
         let amount = 1000u64;
-        let owner = Pubkey::new_unique();
+        let owner = solana_sdk::pubkey::Pubkey::new_unique();
 
         let mut data = amount.to_le_bytes().to_vec();
         data.extend_from_slice(&owner.to_bytes());
@@ -338,7 +320,7 @@ mod tests {
             },
         ];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert_eq!(result["amount"], "1000");
         assert_eq!(result["owner"], owner.to_string());
     }
@@ -354,7 +336,7 @@ mod tests {
             field_type: "vec<u8>".to_string(),
         }];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert!(result["data"].is_array());
         assert_eq!(result["data"].as_array().unwrap().len(), 3);
     }
@@ -370,7 +352,7 @@ mod tests {
             field_type: "option<u64>".to_string(),
         }];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert_eq!(result["value"], "42");
     }
 
@@ -384,7 +366,7 @@ mod tests {
             field_type: "option<u64>".to_string(),
         }];
 
-        let result = BorshDecoder::decode_event_data(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert!(result["value"].is_null());
     }
 }

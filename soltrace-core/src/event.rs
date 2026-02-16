@@ -1,7 +1,7 @@
 use crate::{
-    borsh_decoder::BorshDecoder,
     error::{Result, SoltraceError},
     idl::IdlParser,
+    idl_event::IdlEventDecoder,
     types::{DecodedEvent, IdlEventDefinition},
 };
 
@@ -41,7 +41,7 @@ impl EventDecoder {
                 ))
             })?;
 
-        // Decode the event data
+        // Decode the event data using IDL-based decoder
         let decoded = self.decode_event_data(event_def, event_data)?;
 
         Ok(DecodedEvent {
@@ -51,14 +51,14 @@ impl EventDecoder {
         })
     }
 
-    /// Decode event data using borsh deserialization
+    /// Decode event data using IDL-based borsh deserialization
     fn decode_event_data(
         &self,
         event_def: &IdlEventDefinition,
         data: &[u8],
     ) -> Result<serde_json::Value> {
-        // Try to decode using the IDL field definitions
-        match BorshDecoder::decode_event_data(data, &event_def.fields) {
+        // Use the new IDL-based decoder
+        match IdlEventDecoder::decode(data, &event_def.fields) {
             Ok(decoded) => Ok(decoded),
             Err(_) => {
                 // Fallback to hex encoding if decoding fails
