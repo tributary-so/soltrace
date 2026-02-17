@@ -9,7 +9,7 @@ pub mod types;
 pub mod utils;
 pub mod validation;
 
-pub use db::{Database, EventRecord};
+pub use db::{Database, DatabaseBackend, EventRecord};
 pub use error::{Result, SoltraceError};
 pub use event::EventDecoder;
 pub use idl::IdlParser;

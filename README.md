@@ -8,7 +8,7 @@ A high-performance, IDL-driven Solana event indexer built in Rust. Soltrace inde
 - **Multi-Program Support**: Index events from multiple Anchor programs simultaneously
 - **Real-Time Tracking**: WebSocket-based live event ingestion with exponential backoff auto-reconnect
 - **Historical Backfill**: Efficiently backfill historical events using `get_signatures_for_address`
-- **Flexible Storage**: SQLite with PostgreSQL compatibility (via SQLx)
+- **Flexible Storage**: SQLite, PostgreSQL (with JSONB), and MongoDB support
 - **Event Deduplication**: Automatic duplicate detection and prevention
 - **Production Ready**: Docker support, health checks, and comprehensive error handling
 - **Type-Safe Decoding**: Uses `anchor_lang` borsh utilities for reliable deserialization
@@ -33,7 +33,7 @@ A high-performance, IDL-driven Solana event indexer built in Rust. Soltrace inde
 - **Blockchain SDK**: Solana Rust SDK (solana-client, solana-sdk)
 - **Framework**: Anchor Lang 0.31.1
 - **Serialization**: Borsh 1.0
-- **Database**: SQLite (current), PostgreSQL compatible
+- **Database**: SQLite, PostgreSQL (JSONB), MongoDB (Document-based)
 - **Async Runtime**: Tokio 1.0
 - **CLI**: Clap 4.x
 - **Logging**: Tracing
@@ -50,18 +50,28 @@ Before you begin, ensure you have the following installed:
   source $HOME/.cargo/env
   ```
 
-- **SQLite** (optional, for local development):
-
-  ```bash
-  # macOS
-  brew install sqlite
-
-  # Ubuntu/Debian
-  sudo apt-get install sqlite3 libsqlite3-dev
-
-  # Arch
-  sudo pacman -S sqlite
-  ```
+- **Database** (choose one):
+  - **SQLite** (default, embedded):
+    ```bash
+    # macOS
+    brew install sqlite
+    # Ubuntu/Debian
+    sudo apt-get install sqlite3 libsqlite3-dev
+    # Arch
+    sudo pacman -S sqlite
+    ```
+  - **PostgreSQL** 14+ (for production/high-concurrency):
+    ```bash
+    # Ubuntu/Debian
+    sudo apt-get install postgresql postgresql-contrib
+    # Or use Docker
+    docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5432:5432 postgres:15
+    ```
+  - **MongoDB** 6+ (for document-based storage):
+    ```bash
+    # Or use Docker
+    docker run -d --name mongodb -p 27017:27017 mongo:7
+    ```
 
 - **Docker** (optional, for containerized deployment):
 
@@ -255,11 +265,14 @@ soltrace/
 - Supports all Anchor types: bool, u8-128, i8-128, string, Pubkey, bytes, Option<T>, Vec<T>, arrays
 - Falls back to hex encoding on decoding failures
 
-**Database (`db.rs`)**
+**Database (`db/`)**
 
-- SQLite with SQLx async queries
-- Automatic migrations on startup
-- Event deduplication via unique constraint
+- Trait-based abstraction supporting SQLite, PostgreSQL, and MongoDB
+- Automatic backend selection based on URL scheme
+- SQLite: JSON string storage with SQLx
+- PostgreSQL: JSONB column for efficient querying
+- MongoDB: Document-based with nested data structure
+- Event deduplication via unique constraints
 
 **Real-Time Indexer (`soltrace-live`)**
 
@@ -277,24 +290,57 @@ soltrace/
 
 ### Database Schema
 
+Soltrace supports three database backends with the following schemas:
+
+**SQLite** (Default)
+
 ```sql
 CREATE TABLE events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slot INTEGER NOT NULL,
-    signature TEXT NOT NULL,
+    signature TEXT NOT NULL UNIQUE,
     program_id TEXT NOT NULL,
     event_name TEXT NOT NULL,
     discriminator TEXT NOT NULL,
     data TEXT NOT NULL,  -- JSON-encoded event data
-    timestamp TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('utc'))
+    timestamp TEXT NOT NULL
+);
+```
+
+**PostgreSQL** (with JSONB support)
+
+```sql
+CREATE TABLE events (
+    id BIGSERIAL PRIMARY KEY,
+    slot BIGINT NOT NULL,
+    signature TEXT NOT NULL UNIQUE,
+    program_id TEXT NOT NULL,
+    event_name TEXT NOT NULL,
+    discriminator TEXT NOT NULL,
+    data JSONB NOT NULL,  -- Binary JSON for efficient querying
+    timestamp TIMESTAMPTZ NOT NULL
 );
 
--- Indexes for common queries
-CREATE INDEX idx_events_program_id ON events(program_id);
-CREATE INDEX idx_events_event_name ON events(event_name);
-CREATE INDEX idx_events_timestamp ON events(timestamp);
-CREATE INDEX idx_events_signature ON events(signature);
+-- GIN index for JSONB queries
+CREATE INDEX idx_data_gin ON events USING GIN (data);
+```
+
+**MongoDB** (Document-based)
+
+```javascript
+// Collection: events
+{
+    _id: ObjectId,
+    slot: NumberLong,
+    signature: String,
+    program_id: String,
+    event_name: String,
+    discriminator: String,
+    data: {              // Nested document structure
+        // Event-specific fields
+    },
+    timestamp: ISODate
+}
 ```
 
 ## Configuration
@@ -346,19 +392,19 @@ Supported field types:
 
 ## Environment Variables
 
-| Variable          | Description                          | Default                               |
-| ----------------- | ------------------------------------ | ------------------------------------- |
-| `SOLANA_RPC_URL`  | Solana HTTP RPC endpoint             | `https://api.mainnet-beta.solana.com` |
-| `SOLANA_WS_URL`   | Solana WebSocket endpoint            | `wss://api.mainnet-beta.solana.com`   |
-| `PROGRAM_IDS`     | Comma-separated program IDs to index | (required)                            |
-| `DB_URL`          | Database connection string           | `sqlite:./data/soltrace.db`           |
-| `IDL_DIR`         | Directory containing IDL files       | `./idls`                              |
-| `COMMITMENT`      | Solana commitment level              | `confirmed`                           |
-| `RECONNECT_DELAY` | WebSocket reconnect delay (seconds)  | `5`                                   |
-| `LIMIT`           | Number of signatures to backfill     | `1000`                                |
-| `BATCH_SIZE`      | Concurrent fetch batch size          | `100`                                 |
-| `BATCH_DELAY`     | Delay between batches (ms)           | `100`                                 |
-| `LOG_LEVEL`       | Logging verbosity                    | `info`                                |
+| Variable          | Description                                             | Default                               |
+| ----------------- | ------------------------------------------------------- | ------------------------------------- |
+| `SOLANA_RPC_URL`  | Solana HTTP RPC endpoint                                | `https://api.mainnet-beta.solana.com` |
+| `SOLANA_WS_URL`   | Solana WebSocket endpoint                               | `wss://api.mainnet-beta.solana.com`   |
+| `PROGRAM_IDS`     | Comma-separated program IDs to index                    | (required)                            |
+| `DB_URL`          | Database connection string (sqlite:/postgres:/mongodb:) | `sqlite:./data/soltrace.db`           |
+| `IDL_DIR`         | Directory containing IDL files                          | `./idls`                              |
+| `COMMITMENT`      | Solana commitment level                                 | `confirmed`                           |
+| `RECONNECT_DELAY` | WebSocket reconnect delay (seconds)                     | `5`                                   |
+| `LIMIT`           | Number of signatures to backfill                        | `1000`                                |
+| `BATCH_SIZE`      | Concurrent fetch batch size                             | `100`                                 |
+| `BATCH_DELAY`     | Delay between batches (ms)                              | `100`                                 |
+| `LOG_LEVEL`       | Logging verbosity                                       | `info`                                |
 
 ## Available Commands
 
@@ -589,17 +635,26 @@ spec:
 
 ### Database Issues
 
-**Error**: `UNIQUE constraint failed`
+**Error**: `UNIQUE constraint failed` (SQLite/PostgreSQL)
 
 **This is normal** - indicates duplicate event detection working correctly. Events are only inserted once.
 
-**Error**: `database is locked`
+**Error**: `database is locked` (SQLite)
 
 **Solutions**:
 
-1. Use PostgreSQL for high-concurrency scenarios
+1. Use PostgreSQL or MongoDB for high-concurrency scenarios
 2. Increase SQLite busy timeout
 3. Reduce concurrency settings
+
+**Error**: Connection refused (PostgreSQL/MongoDB)
+
+**Solutions**:
+
+1. Verify database server is running and accessible
+2. Check connection URL format
+3. Verify credentials and permissions
+4. Check firewall rules
 
 ### Build Errors
 
@@ -632,7 +687,7 @@ brew install sqlite
 
 ## Querying Events
 
-Query the SQLite database directly:
+### SQLite
 
 ```bash
 # All events from a program
@@ -649,6 +704,54 @@ sqlite3 soltrace.db "SELECT program_id, event_name, COUNT(*) FROM events GROUP B
 
 # Recent events
 sqlite3 soltrace.db "SELECT * FROM events ORDER BY timestamp DESC LIMIT 100;"
+```
+
+### PostgreSQL
+
+```sql
+-- All events from a program
+SELECT * FROM events WHERE program_id = 'YourProgramId' LIMIT 10;
+
+-- Query JSONB data (e.g., events where amount > 1000)
+SELECT * FROM events
+WHERE event_name = 'Transfer'
+  AND data->>'amount' > '1000';
+
+-- Query nested JSONB fields
+SELECT * FROM events
+WHERE data->>'from' = 'SenderPubkey';
+
+-- Events in slot range
+SELECT * FROM events WHERE slot BETWEEN 123456 AND 123500;
+
+-- Event count by program
+SELECT program_id, event_name, COUNT(*)
+FROM events
+GROUP BY program_id, event_name;
+```
+
+### MongoDB
+
+```javascript
+// All events from a program
+db.events.find({ program_id: "YourProgramId" }).limit(10);
+
+// Events by type
+db.events.find({ event_name: "Transfer" });
+
+// Query nested data (e.g., amount > 1000)
+db.events.find({
+  event_name: "Transfer",
+  "data.amount": { $gt: 1000 },
+});
+
+// Events in slot range
+db.events.find({
+  slot: { $gte: 123456, $lte: 123500 },
+});
+
+// Event count by program
+db.events.aggregate([{ $group: { _id: "$program_id", count: { $sum: 1 } } }]);
 ```
 
 ## Additional Documentation
