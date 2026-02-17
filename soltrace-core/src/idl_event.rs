@@ -31,9 +31,30 @@ impl IdlEventDecoder {
     }
 
     /// Decode a single field using borsh format
-    fn decode_field(data: &[u8], offset: usize, field_type: &str) -> Result<(Value, usize)> {
+    fn decode_field(
+        data: &[u8],
+        offset: usize,
+        field_type: &serde_json::Value,
+    ) -> Result<(Value, usize)> {
         let data = &data[offset..];
 
+        // Handle complex types (objects like {"array": ["u8", 64]})
+        if let Some(obj) = field_type.as_object() {
+            return Self::decode_complex_type(data, obj);
+        }
+
+        // Simple string type
+        if let Some(type_str) = field_type.as_str() {
+            return Self::decode_simple_type(data, type_str);
+        }
+
+        Err(SoltraceError::EventDecode(format!(
+            "Invalid field type: {}",
+            field_type
+        )))
+    }
+
+    fn decode_simple_type(data: &[u8], field_type: &str) -> Result<(Value, usize)> {
         match field_type {
             // Boolean
             "bool" => {
@@ -105,7 +126,8 @@ impl IdlEventDecoder {
                 let is_some = data[0] != 0;
                 if is_some {
                     let inner_type = &t[7..t.len() - 1];
-                    let (value, bytes_read) = Self::decode_field(&data[1..], 0, inner_type)?;
+                    let (value, bytes_read) =
+                        Self::decode_field(&data[1..], 0, &serde_json::json!(inner_type))?;
                     Ok((value, 1 + bytes_read))
                 } else {
                     Ok((Value::Null, 1))
@@ -136,8 +158,11 @@ impl IdlEventDecoder {
                 let mut arr = Vec::with_capacity(len);
                 let mut total_bytes = 0;
                 for _ in 0..len {
-                    let (value, bytes_read) =
-                        Self::decode_field(&data[total_bytes..], 0, inner_type)?;
+                    let (value, bytes_read) = Self::decode_field(
+                        &data[total_bytes..],
+                        0,
+                        &serde_json::json!(inner_type),
+                    )?;
                     arr.push(value);
                     total_bytes += bytes_read;
                 }
@@ -150,6 +175,54 @@ impl IdlEventDecoder {
                 field_type
             ))),
         }
+    }
+
+    fn decode_complex_type(
+        data: &[u8],
+        obj: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(Value, usize)> {
+        // Handle array type: {"array": ["u8", 64]}
+        if let Some(array) = obj.get("array") {
+            if let Some(arr) = array.as_array() {
+                if arr.len() == 2 {
+                    if let Some(inner_type) = arr[0].as_str() {
+                        if let Some(size) = arr[1].as_u64() {
+                            return Self::decode_fixed_array(data, inner_type, size as usize);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle defined type: {"defined": {"name": "SomeType"}}
+        if let Some(defined) = obj.get("defined") {
+            if let Some(name) = defined.get("name") {
+                if let Some(type_name) = name.as_str() {
+                    return Err(SoltraceError::EventDecode(format!(
+                        "Defined type '{}' not yet supported",
+                        type_name
+                    )));
+                }
+            }
+        }
+
+        Err(SoltraceError::EventDecode(format!(
+            "Unsupported complex type: {:?}",
+            obj
+        )))
+    }
+
+    fn decode_fixed_array(data: &[u8], inner_type: &str, size: usize) -> Result<(Value, usize)> {
+        let mut arr = Vec::with_capacity(size);
+        let mut offset = 0;
+
+        for _ in 0..size {
+            let (value, bytes_read) = Self::decode_simple_type(&data[offset..], inner_type)?;
+            arr.push(value);
+            offset += bytes_read;
+        }
+
+        Ok((Value::Array(arr), offset))
     }
 
     /// Read little-endian bytes into an integer type
@@ -234,7 +307,8 @@ impl IdlEventDecoder {
         let mut total_bytes = 4;
 
         for _ in 0..len {
-            let (value, bytes_read) = Self::decode_field(&data[total_bytes..], 0, inner_type)?;
+            let (value, bytes_read) =
+                Self::decode_field(&data[total_bytes..], 0, &serde_json::json!(inner_type))?;
             result.push(value);
             total_bytes += bytes_read;
         }
@@ -253,7 +327,7 @@ mod tests {
         let data = 42u64.to_le_bytes().to_vec();
         let fields = vec![IdlField {
             name: "amount".to_string(),
-            field_type: "u64".to_string(),
+            field_type: serde_json::json!("u64"),
         }];
 
         let result = IdlEventDecoder::decode(&data, &fields).unwrap();
@@ -266,7 +340,7 @@ mod tests {
         let data = pubkey.to_bytes().to_vec();
         let fields = vec![IdlField {
             name: "owner".to_string(),
-            field_type: "publicKey".to_string(),
+            field_type: serde_json::json!("publicKey"),
         }];
 
         let result = IdlEventDecoder::decode(&data, &fields).unwrap();
@@ -281,7 +355,7 @@ mod tests {
 
         let fields = vec![IdlField {
             name: "message".to_string(),
-            field_type: "string".to_string(),
+            field_type: serde_json::json!("string"),
         }];
 
         let result = IdlEventDecoder::decode(&data, &fields).unwrap();
@@ -293,7 +367,7 @@ mod tests {
         let data = vec![1u8]; // true
         let fields = vec![IdlField {
             name: "active".to_string(),
-            field_type: "bool".to_string(),
+            field_type: serde_json::json!("bool"),
         }];
 
         let result = IdlEventDecoder::decode(&data, &fields).unwrap();
@@ -312,11 +386,11 @@ mod tests {
         let fields = vec![
             IdlField {
                 name: "amount".to_string(),
-                field_type: "u64".to_string(),
+                field_type: serde_json::json!("u64"),
             },
             IdlField {
                 name: "owner".to_string(),
-                field_type: "publicKey".to_string(),
+                field_type: serde_json::json!("publicKey"),
             },
         ];
 
@@ -333,7 +407,7 @@ mod tests {
 
         let fields = vec![IdlField {
             name: "data".to_string(),
-            field_type: "vec<u8>".to_string(),
+            field_type: serde_json::json!("vec<u8>"),
         }];
 
         let result = IdlEventDecoder::decode(&data, &fields).unwrap();
@@ -349,7 +423,7 @@ mod tests {
 
         let fields = vec![IdlField {
             name: "value".to_string(),
-            field_type: "option<u64>".to_string(),
+            field_type: serde_json::json!("option<u64>"),
         }];
 
         let result = IdlEventDecoder::decode(&data, &fields).unwrap();
@@ -363,10 +437,30 @@ mod tests {
 
         let fields = vec![IdlField {
             name: "value".to_string(),
-            field_type: "option<u64>".to_string(),
+            field_type: serde_json::json!("option<u64>"),
         }];
 
         let result = IdlEventDecoder::decode(&data, &fields).unwrap();
         assert!(result["value"].is_null());
+    }
+
+    #[test]
+    fn test_decode_fixed_array() {
+        // array<u8, 64>
+        let data = vec![1u8, 2u8, 3u8, 4u8];
+
+        let fields = vec![IdlField {
+            name: "memo".to_string(),
+            field_type: serde_json::json!({"array": ["u8", 4]}),
+        }];
+
+        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        assert!(result["memo"].is_array());
+        let arr = result["memo"].as_array().unwrap();
+        assert_eq!(arr.len(), 4);
+        assert_eq!(arr[0], 1);
+        assert_eq!(arr[1], 2);
+        assert_eq!(arr[2], 3);
+        assert_eq!(arr[3], 4);
     }
 }

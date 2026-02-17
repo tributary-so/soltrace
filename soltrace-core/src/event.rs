@@ -42,7 +42,7 @@ impl EventDecoder {
             })?;
 
         // Decode the event data using IDL-based decoder
-        let decoded = self.decode_event_data(event_def, event_data)?;
+        let decoded = self.decode_event_data(&event_def, event_data)?;
 
         Ok(DecodedEvent {
             event_name: event_def.name.clone(),

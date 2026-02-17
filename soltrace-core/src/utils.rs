@@ -162,7 +162,6 @@ mod tests {
         // Base64 "eyJldmVudCI6IlRyYW5zZmVyIn0=" decodes to '{"event":"Transfer"}'
         // In real logs, the program_id check happens against other log lines
         let log = "Program data: eyJldmVudCI6IlRyYW5zZmVyIn0=";
-        let program_id = "data:"; // Use something that exists in the log for test
         let result = extract_event_from_log(log);
 
         assert!(result.is_some());
@@ -171,8 +170,7 @@ mod tests {
 
     #[test]
     fn test_extract_event_no_match() {
-        let log = "Program data: eyJldmVudCI6IlRyYW5zZmVyIn0=";
-        let program_id = "NonExistentProgram";
+        let log = "Program log: Some other log";
         let result = extract_event_from_log(log);
 
         assert!(result.is_none());

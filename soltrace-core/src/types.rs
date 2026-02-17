@@ -26,7 +26,7 @@ pub struct ParsedIdl {
     pub errors: Option<serde_json::Value>,
 
     #[serde(default)]
-    pub types: Option<serde_json::Value>,
+    pub types: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,13 +49,15 @@ pub struct IdlEventDefinition {
     pub name: String,
     #[serde(default)]
     pub fields: Option<Vec<IdlField>>,
+    #[serde(default)]
+    pub r#type: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdlField {
     pub name: String,
     #[serde(rename = "type")]
-    pub field_type: String,
+    pub field_type: serde_json::Value,
 }
 
 /// Represents a decoded Anchor event
