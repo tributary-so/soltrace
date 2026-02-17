@@ -1,13 +1,8 @@
-use crate::{
-    db::Database,
-    event::EventDecoder,
-    idl::IdlParser,
-    types::RawEvent,
-};
+use crate::{db::Database, event::EventDecoder, idl::IdlParser, types::RawEvent};
 use anyhow::Result;
-use tracing::{info, warn, debug, error};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use solana_transaction_status::EncodedConfirmedTransactionWithStatusMeta;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use tracing::{debug, error, info, warn};
 
 /// Load all IDL files from a directory
 pub async fn load_idls(idl_parser: &mut IdlParser, idl_dir: &str) -> Result<()> {
@@ -55,7 +50,9 @@ pub async fn process_transaction(
 
     let slot = transaction.slot;
 
-    let meta = transaction.transaction.meta
+    let meta = transaction
+        .transaction
+        .meta
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Transaction has no metadata"))?;
 
@@ -71,13 +68,15 @@ pub async fn process_transaction(
 
     // Get transaction signature from the encoded transaction
     let signature = match &transaction.transaction.transaction {
-        solana_transaction_status::EncodedTransaction::Json(ui_tx) => {
-            ui_tx.signatures.first()
-                .ok_or_else(|| anyhow::anyhow!("Transaction has no signature"))?
-                .to_string()
-        }
+        solana_transaction_status::EncodedTransaction::Json(ui_tx) => ui_tx
+            .signatures
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("Transaction has no signature"))?
+            .to_string(),
         _ => {
-            return Err(anyhow::anyhow!("Only JSON-encoded transactions are supported"));
+            return Err(anyhow::anyhow!(
+                "Only JSON-encoded transactions are supported"
+            ));
         }
     };
 
@@ -90,7 +89,7 @@ pub async fn process_transaction(
     // Process logs for events
     let mut events_count = 0;
     for log in logs {
-        if let Some(event_data) = extract_event_from_log(&log, program_id_str) {
+        if let Some(event_data) = extract_event_from_log(&log) {
             // Decode event
             match event_decoder.decode_event(program_id_str, &event_data) {
                 Ok(decoded_event) => {
@@ -98,7 +97,8 @@ pub async fn process_transaction(
                     let raw_event = RawEvent {
                         slot,
                         signature: signature.clone(),
-                        program_id: program_id_str.parse()
+                        program_id: program_id_str
+                            .parse()
                             .unwrap_or_else(|_| solana_sdk::pubkey::Pubkey::default()),
                         log: log.to_string(),
                         timestamp,
@@ -108,7 +108,10 @@ pub async fn process_transaction(
                     match db.insert_event(&decoded_event, &raw_event).await {
                         Ok(_) => {
                             events_count += 1;
-                            debug!("Stored event: {} from {}", decoded_event.event_name, signature);
+                            debug!(
+                                "Stored event: {} from {}",
+                                decoded_event.event_name, signature
+                            );
                         }
                         Err(e) => {
                             if e.to_string().contains("UNIQUE constraint") {
@@ -135,7 +138,7 @@ pub async fn process_transaction(
 
 /// Extract event data from a log line
 /// Looks for Anchor program log entries with base64-encoded data
-pub fn extract_event_from_log(log: &str, program_id_str: &str) -> Option<Vec<u8>> {
+pub fn extract_event_from_log(log: &str) -> Option<Vec<u8>> {
     // Anchor events appear in logs as "Program data: <base64_data>"
     // or "Program log: <hex_data>"
 
@@ -143,9 +146,7 @@ pub fn extract_event_from_log(log: &str, program_id_str: &str) -> Option<Vec<u8>
         let data_str = log.strip_prefix("Program data: ")?.trim();
         if let Ok(data) = STANDARD.decode(data_str) {
             // Verify this is for our program
-            if log.contains(program_id_str) {
-                return Some(data);
-            }
+            return Some(data);
         }
     }
 
@@ -162,7 +163,7 @@ mod tests {
         // In real logs, the program_id check happens against other log lines
         let log = "Program data: eyJldmVudCI6IlRyYW5zZmVyIn0=";
         let program_id = "data:"; // Use something that exists in the log for test
-        let result = extract_event_from_log(log, program_id);
+        let result = extract_event_from_log(log);
 
         assert!(result.is_some());
         assert_eq!(result.unwrap(), br#"{"event":"Transfer"}"#);
@@ -172,7 +173,7 @@ mod tests {
     fn test_extract_event_no_match() {
         let log = "Program data: eyJldmVudCI6IlRyYW5zZmVyIn0=";
         let program_id = "NonExistentProgram";
-        let result = extract_event_from_log(log, program_id);
+        let result = extract_event_from_log(log);
 
         assert!(result.is_none());
     }

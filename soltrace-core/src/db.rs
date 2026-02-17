@@ -1,6 +1,6 @@
 use crate::{
     error::Result,
-    types::{Slot, DecodedEvent, RawEvent},
+    types::{DecodedEvent, RawEvent, Slot},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -17,7 +17,6 @@ pub struct EventRecord {
     pub discriminator: String, // Hex-encoded
     pub data: String,          // JSON-encoded
     pub timestamp: DateTime<Utc>,
-    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -27,7 +26,23 @@ pub struct Database {
 
 impl Database {
     pub async fn new(database_url: &str) -> Result<Self> {
-        let pool = sqlx::sqlite::SqlitePool::connect(database_url).await?;
+        let db_path = database_url.trim_start_matches("sqlite:");
+        tracing::info!("Database path: {}", db_path);
+
+        if let Some(parent) = std::path::Path::new(db_path).parent() {
+            let parent_str = parent.display().to_string();
+            if !parent_str.is_empty() {
+                tracing::info!("Creating database directory: {}", parent_str);
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        tracing::info!("Connecting to database: {}", database_url);
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(db_path)
+            .create_if_missing(true);
+
+        let pool = sqlx::sqlite::SqlitePool::connect_with(options).await?;
 
         let db = Self { pool };
         db.run_migrations().await?;
@@ -36,7 +51,8 @@ impl Database {
     }
 
     pub async fn run_migrations(&self) -> Result<()> {
-        sqlx::query(r#"
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 slot INTEGER NOT NULL,
@@ -45,8 +61,7 @@ impl Database {
                 event_name TEXT NOT NULL,
                 discriminator TEXT NOT NULL,
                 data TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('utc'))
+                timestamp TEXT NOT NULL
             );
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_signature_unique ON events(signature);
@@ -55,7 +70,8 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_program_id ON events(program_id);
             CREATE INDEX IF NOT EXISTS idx_event_name ON events(event_name);
             CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp);
-        "#)
+        "#,
+        )
         .execute(&self.pool)
         .await?;
 
@@ -91,7 +107,7 @@ impl Database {
         end_slot: Slot,
     ) -> Result<Vec<EventRecord>> {
         let events = sqlx::query_as::<_, EventRecord>(
-            "SELECT * FROM events WHERE slot >= ?1 AND slot <= ?2 ORDER BY slot ASC"
+            "SELECT * FROM events WHERE slot >= ?1 AND slot <= ?2 ORDER BY slot ASC",
         )
         .bind(start_slot as i64)
         .bind(end_slot as i64)
@@ -104,7 +120,7 @@ impl Database {
     /// Get events by program
     pub async fn get_events_by_program(&self, program_id: &str) -> Result<Vec<EventRecord>> {
         let events = sqlx::query_as::<_, EventRecord>(
-            "SELECT * FROM events WHERE program_id = ?1 ORDER BY slot DESC"
+            "SELECT * FROM events WHERE program_id = ?1 ORDER BY slot DESC",
         )
         .bind(program_id)
         .fetch_all(&self.pool)
@@ -116,7 +132,7 @@ impl Database {
     /// Get events by event name
     pub async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>> {
         let events = sqlx::query_as::<_, EventRecord>(
-            "SELECT * FROM events WHERE event_name = ?1 ORDER BY slot DESC"
+            "SELECT * FROM events WHERE event_name = ?1 ORDER BY slot DESC",
         )
         .bind(event_name)
         .fetch_all(&self.pool)
@@ -127,14 +143,14 @@ impl Database {
 
     /// Get the latest indexed slot for a program
     pub async fn get_latest_slot(&self, program_id: &str) -> Result<Option<Slot>> {
-        let row = sqlx::query(
-            "SELECT MAX(slot) as max_slot FROM events WHERE program_id = ?1"
-        )
-        .bind(program_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row = sqlx::query("SELECT MAX(slot) as max_slot FROM events WHERE program_id = ?1")
+            .bind(program_id)
+            .fetch_optional(&self.pool)
+            .await?;
 
-        Ok(row.and_then(|r| r.get::<Option<i64>, _>("max_slot")).map(|s| s as Slot))
+        Ok(row
+            .and_then(|r| r.get::<Option<i64>, _>("max_slot"))
+            .map(|s| s as Slot))
     }
 
     /// Check if an event already exists (by signature)

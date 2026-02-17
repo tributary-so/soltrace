@@ -1,5 +1,5 @@
-use solana_sdk::pubkey::Pubkey;
 use serde::{Deserialize, Serialize};
+use solana_sdk::pubkey::Pubkey;
 
 pub type Slot = u64;
 pub type ProgramId = Pubkey;
@@ -7,16 +7,48 @@ pub type EventDiscriminator = [u8; 8];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedIdl {
-    pub version: String,
+    #[serde(default)]
+    pub version: Option<String>,
     pub name: Option<String>,
     pub events: Vec<IdlEventDefinition>,
     pub address: String,
+
+    #[serde(default)]
+    pub metadata: Option<IdlMetadata>,
+
+    #[serde(default)]
+    pub instructions: Option<serde_json::Value>,
+
+    #[serde(default)]
+    pub accounts: Option<serde_json::Value>,
+
+    #[serde(default)]
+    pub errors: Option<serde_json::Value>,
+
+    #[serde(default)]
+    pub types: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlMetadata {
+    #[serde(default)]
+    pub version: Option<String>,
+
+    #[serde(default)]
+    pub name: Option<String>,
+
+    #[serde(default)]
+    pub spec: Option<String>,
+
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdlEventDefinition {
     pub name: String,
-    pub fields: Vec<IdlField>,
+    #[serde(default)]
+    pub fields: Option<Vec<IdlField>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

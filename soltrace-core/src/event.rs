@@ -57,8 +57,11 @@ impl EventDecoder {
         event_def: &IdlEventDefinition,
         data: &[u8],
     ) -> Result<serde_json::Value> {
+        let empty_fields: Vec<crate::types::IdlField> = vec![];
+        let fields = event_def.fields.as_ref().unwrap_or(&empty_fields);
+
         // Use the new IDL-based decoder
-        match IdlEventDecoder::decode(data, &event_def.fields) {
+        match IdlEventDecoder::decode(data, fields) {
             Ok(decoded) => Ok(decoded),
             Err(_) => {
                 // Fallback to hex encoding if decoding fails

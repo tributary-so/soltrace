@@ -1,24 +1,19 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use solana_sdk::pubkey::Pubkey;
-use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
-use solana_client::rpc_config::{RpcTransactionLogsFilter, RpcTransactionLogsConfig};
+use futures::StreamExt;
+use solana_client::rpc_config::{RpcTransactionLogsConfig, RpcTransactionLogsFilter};
 use solana_commitment_config::CommitmentConfig;
+use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
+use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    Database,
-    EventDecoder,
-    IdlParser,
-    load_idls,
-    utils::extract_event_from_log,
-    types::RawEvent,
+    load_idls, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, IdlParser,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, error, debug};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
-use futures::StreamExt;
+use tracing::{debug, error, info};
 
 /// Soltrace Live - Real-time Solana event indexer via WebSocket
 #[derive(Parser)]
@@ -34,41 +29,51 @@ enum Commands {
     /// Initialize database
     Init {
         /// Database URL
-        #[arg(short, long, default_value = "sqlite:./soltrace.db")]
+        #[arg(short, long, default_value = "sqlite:./soltrace.db", env("DB_URL"))]
         db_url: String,
     },
     /// Start real-time event indexing
     Run {
         /// Solana RPC WebSocket URL
-        #[arg(short, long, default_value = "wss://api.mainnet-beta.solana.com")]
+        #[arg(
+            short,
+            long,
+            default_value = "wss://api.mainnet-beta.solana.com",
+            env("SOLANA_WS_URL")
+        )]
         ws_url: String,
 
         /// Solana RPC HTTP URL (for initial validation)
-        #[arg(short, long, default_value = "https://api.mainnet-beta.solana.com")]
+        #[arg(
+            short,
+            long,
+            default_value = "https://api.mainnet-beta.solana.com",
+            env("SOLANA_RPC_URL")
+        )]
         rpc_url: String,
 
         /// Comma-separated list of program IDs to index
-        #[arg(short, long)]
+        #[arg(short, long, env("PROGRAM_IDS"))]
         programs: String,
 
         /// Database URL
-        #[arg(short, long, default_value = "sqlite:./soltrace.db")]
+        #[arg(short, long, default_value = "sqlite:./soltrace.db", env("DB_URL"))]
         db_url: String,
 
         /// IDL directory path
-        #[arg(short, long, default_value = "./idls")]
+        #[arg(short, long, default_value = "./idls", env("IDL_DIR"))]
         idl_dir: String,
 
         /// Log commitment level (processed, confirmed, finalized)
-        #[arg(short, long, default_value = "confirmed")]
+        #[arg(short, long, default_value = "confirmed", env("COMMITMENT"))]
         commitment: String,
 
         /// Reconnect delay in seconds
-        #[arg(long, default_value = "5")]
+        #[arg(long, default_value = "5", env("RECONNECT_DELAY"))]
         reconnect_delay: u64,
 
         /// Maximum number of reconnection attempts (0 = infinite)
-        #[arg(long, default_value = "0")]
+        #[arg(long, default_value = "0", env("MAX_RECONNECT_ATTEMPTS"))]
         max_reconnects: u32,
     },
 }
@@ -108,7 +113,8 @@ async fn main() -> Result<()> {
                 commitment,
                 reconnect_delay,
                 max_reconnects,
-            ).await?;
+            )
+            .await?;
         }
     }
 
@@ -189,7 +195,8 @@ async fn run_indexer(
         reconnect_delay,
         max_reconnects,
         processed_signatures,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -209,11 +216,17 @@ async fn run_websocket_loop(
 
     loop {
         if max_reconnects > 0 && reconnect_count >= max_reconnects {
-            error!("Maximum reconnection attempts ({}) reached. Exiting.", max_reconnects);
+            error!(
+                "Maximum reconnection attempts ({}) reached. Exiting.",
+                max_reconnects
+            );
             return Err(anyhow::anyhow!("Max reconnections exceeded"));
         }
 
-        info!("\nConnecting to WebSocket (attempt {})...", reconnect_count + 1);
+        info!(
+            "\nConnecting to WebSocket (attempt {})...",
+            reconnect_count + 1
+        );
 
         match websocket_handler(
             ws_url,
@@ -223,7 +236,9 @@ async fn run_websocket_loop(
             db.clone(),
             commitment,
             processed_signatures.clone(),
-        ).await {
+        )
+        .await
+        {
             Ok(_) => {
                 info!("WebSocket connection closed normally");
                 break;
@@ -231,14 +246,14 @@ async fn run_websocket_loop(
             Err(e) => {
                 error!("WebSocket error: {}", e);
                 reconnect_count += 1;
-                
+
                 let delay = if reconnect_count > 10 {
                     // Cap exponential backoff at ~17 minutes
                     Duration::from_secs(60 * 15)
                 } else {
                     Duration::from_secs(reconnect_delay * 2u64.pow(reconnect_count.min(10)))
                 };
-                
+
                 info!("Reconnecting in {:?}...", delay);
                 sleep(delay).await;
             }
@@ -267,7 +282,8 @@ async fn websocket_handler(
     let commitment_config = parse_commitment(commitment)?;
 
     // Create PubsubClient
-    let pubsub_client = PubsubClient::new(ws_url).await
+    let pubsub_client = PubsubClient::new(ws_url)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to WebSocket: {}", e))?;
 
     info!("WebSocket connected successfully");
@@ -277,7 +293,7 @@ async fn websocket_handler(
     let logs_config = RpcTransactionLogsConfig {
         commitment: Some(commitment_config),
     };
-    
+
     let (mut notifications, unsubscribe) = pubsub_client
         .logs_subscribe(filter, logs_config)
         .await
@@ -294,12 +310,9 @@ async fn websocket_handler(
     // Spawn processing task
     let processor_handle = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            match process_logs_message(
-                message,
-                &program_ids_clone,
-                &event_decoder_clone,
-                &db_clone,
-            ).await {
+            match process_logs_message(message, &program_ids_clone, &event_decoder_clone, &db_clone)
+                .await
+            {
                 Ok(count) => {
                     if count > 0 {
                         debug!("Processed {} events", count);
@@ -334,12 +347,13 @@ async fn websocket_handler(
             }
         }
         Ok(())
-    }.await;
+    }
+    .await;
 
     // Cleanup
     drop(tx);
     let _ = processor_handle.await;
-    
+
     // Unsubscribe
     unsubscribe().await;
 
@@ -381,7 +395,7 @@ async fn process_logs_message(
 
     for log in logs {
         for program_id in program_ids {
-            if let Some(event_data) = extract_event_from_log(log, &program_id.to_string()) {
+            if let Some(event_data) = extract_event_from_log(log) {
                 // Decode event
                 match event_decoder.decode_event(&program_id.to_string(), &event_data) {
                     Ok(decoded_event) => {
@@ -397,12 +411,17 @@ async fn process_logs_message(
                         // Store event
                         match db.insert_event(&decoded_event, &raw_event).await {
                             Ok(_) => {
-                                info!("Stored event: {} from {}", decoded_event.event_name, signature);
+                                info!(
+                                    "Stored event: {} from {}",
+                                    decoded_event.event_name, signature
+                                );
                                 events_found += 1;
                             }
                             Err(e) => {
                                 let err_str = e.to_string();
-                                if err_str.contains("UNIQUE constraint") || err_str.contains("duplicate") {
+                                if err_str.contains("UNIQUE constraint")
+                                    || err_str.contains("duplicate")
+                                {
                                     debug!("Event {} already exists, skipping", signature);
                                 } else {
                                     error!("Failed to store event: {}", e);
@@ -427,7 +446,8 @@ mod tests {
 
     #[test]
     fn test_program_id_parsing() {
-        let programs = "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        let programs =
+            "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
         let parsed: Vec<String> = programs
             .split(',')
             .map(|s| s.trim().to_string())

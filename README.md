@@ -1,194 +1,281 @@
 # Soltrace
 
-A flexible, IDL-driven Solana event indexer built in Rust.
+A high-performance, IDL-driven Solana event indexer built in Rust. Soltrace indexes Anchor events from Solana programs using the program's IDL for automatic decoding. It supports both real-time tracking (via WebSocket) and historical backfilling, with automatic deduplication and robust error handling.
 
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)](https://www.rust-lang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## Key Features
 
-## Overview
+- **IDL-Driven Decoding**: Provide an Anchor IDL, get decoded events automatically using `anchor_lang` utilities
+- **Multi-Program Support**: Index events from multiple Anchor programs simultaneously
+- **Real-Time Tracking**: WebSocket-based live event ingestion with exponential backoff auto-reconnect
+- **Historical Backfill**: Efficiently backfill historical events using `get_signatures_for_address`
+- **Flexible Storage**: SQLite with PostgreSQL compatibility (via SQLx)
+- **Event Deduplication**: Automatic duplicate detection and prevention
+- **Production Ready**: Docker support, health checks, and comprehensive error handling
+- **Type-Safe Decoding**: Uses `anchor_lang` borsh utilities for reliable deserialization
 
-Soltrace indexes Anchor events from Solana programs using the program's IDL for decoding. It supports multiple programs and handles both real-time tracking (via WebSocket) and historical backfilling.
+## Table of Contents
 
-## Features
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Getting Started](#getting-started)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [Environment Variables](#environment-variables)
+- [Available Commands](#available-commands)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Troubleshooting](#troubleshooting)
+- [Additional Documentation](#additional-documentation)
 
-- ✅ **IDL-driven decoding**: Provide an IDL, get decoded events automatically
-- ✅ **Multi-program support**: Index events from multiple Anchor programs
-- ✅ **Real-time tracking**: WebSocket-based live event ingestion with auto-reconnect
-- ✅ **Historical backfill**: Backfill historical events using `get_signatures_for_address`
-- ✅ **Flexible storage**: SQLite (current) with PostgreSQL compatibility
-- ✅ **Event deduplication**: Automatic duplicate event detection
-- ✅ **Shared utilities**: Common code between live and backfill applications
-- ✅ **Connection health**: Automatic reconnection and subscription renewal
+## Tech Stack
 
-## Quick Start
+- **Language**: Rust 1.70+
+- **Blockchain SDK**: Solana Rust SDK (solana-client, solana-sdk)
+- **Framework**: Anchor Lang 0.31.1
+- **Serialization**: Borsh 1.0
+- **Database**: SQLite (current), PostgreSQL compatible
+- **Async Runtime**: Tokio 1.0
+- **CLI**: Clap 4.x
+- **Logging**: Tracing
+- **Container**: Docker & Docker Compose
 
-### Prerequisites
+## Prerequisites
 
-- Rust 1.70 or later
-- Solana CLI (optional, for IDL extraction)
-- Docker and Docker Compose (optional, for containerized deployment)
-- SQLite (for local development) or PostgreSQL
+Before you begin, ensure you have the following installed:
 
-### Installation
+- **Rust 1.70 or later**: Install via [rustup](https://rustup.rs/)
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  source $HOME/.cargo/env
+  ```
+
+- **SQLite** (optional, for local development):
+
+  ```bash
+  # macOS
+  brew install sqlite
+
+  # Ubuntu/Debian
+  sudo apt-get install sqlite3 libsqlite3-dev
+
+  # Arch
+  sudo pacman -S sqlite
+  ```
+
+- **Docker** (optional, for containerized deployment):
+
+  ```bash
+  # Follow instructions at https://docs.docker.com/get-docker/
+  ```
+
+- **Solana CLI** (optional, for IDL extraction):
+  ```bash
+  sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+  ```
+
+## Getting Started
+
+### 1. Clone the Repository
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-org/soltrace.git
 cd soltrace
-
-# Build project (choose one)
-cargo build --release
-# OR build with Docker
-docker-compose build
-
-# The binaries will be in target/release/
-# - soltrace-live: Real-time event tracker
-# - soltrace-backfill: Historical event backfiller
 ```
 
-### Docker Quick Start
+### 2. Build the Project
 
 ```bash
-# Configure environment
-cp .env.example .env
-nano .env  # Set PROGRAM_IDS
+# Build all workspace members in release mode
+cargo build --release
 
-# Start with Docker Compose
-docker-compose up -d soltrace-live
-
-# View logs
-docker-compose logs -f soltrace-live
+# Or build in debug mode for development
+cargo build
 ```
 
-See [DOCKER.md](DOCKER.md) for complete Docker deployment guide.
+The compiled binaries will be available at:
 
-### 1. Add IDLs
+- `target/release/soltrace-live` - Real-time event indexer
+- `target/release/soltrace-backfill` - Historical event backfiller
 
-Place your Anchor IDL files in the `idls/` directory:
+### 3. Prepare IDL Files
+
+Create an `idls/` directory and add your Anchor IDL files:
 
 ```bash
 mkdir idls
 
-# Option 1: From Anchor workspace
-cp target/idl/my_program.json idls/
+# Option 1: Copy from Anchor workspace
+cp target/idl/*.json idls/
 
-# Option 2: Download from program
+# Option 2: Fetch from deployed program
 anchor idl fetch <PROGRAM_ID> --provider-cluster mainnet > idls/my_program.json
+
+# Option 3: Manually create IDL
+# See docs/IDL_EXAMPLE.md for format
 ```
 
-See [IDL_EXAMPLE.md](IDL_EXAMPLE.md) for an example IDL format.
+### 4. Configure Environment
 
-### 2. Initialize Database
+Copy the example environment file:
 
 ```bash
-./target/release/soltrace-live init
+cp .env.example .env
 ```
 
-This creates `soltrace.db` in the current directory.
+Edit `.env` with your configuration:
 
-### 3. Real-time Tracking
+```env
+# Solana RPC Configuration
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+SOLANA_WS_URL=wss://api.mainnet-beta.solana.com
+
+# Program IDs to index (comma-separated)
+PROGRAM_IDS=YourProgramId1,YourProgramId2
+
+# Database Configuration
+DB_URL=sqlite:./data/soltrace.db
+IDL_DIR=./idls
+
+# Indexer Configuration
+COMMITMENT=confirmed
+RECONNECT_DELAY=5
+
+# Backfill Configuration
+LIMIT=1000
+BATCH_SIZE=100
+BATCH_DELAY=100
+
+# Logging
+LOG_LEVEL=info
+```
+
+### 5. Initialize Database
+
+```bash
+./target/release/soltrace-live init --db-url sqlite:./soltrace.db
+```
+
+This creates the SQLite database with the events table.
+
+### 6. Run Real-Time Indexer
+
+Start indexing events in real-time:
 
 ```bash
 ./target/release/soltrace-live run \
-  --programs "ProgramID1,ProgramID2" \
+  --programs "YourProgramId1,YourProgramId2" \
   --idl-dir ./idls \
   --db-url sqlite:./soltrace.db \
   --rpc-url https://api.mainnet-beta.solana.com \
+  --ws-url wss://api.mainnet-beta.solana.com \
   --commitment confirmed
 ```
 
-### 4. Backfill Historical Events
+### 7. Backfill Historical Events
+
+To index historical events:
 
 ```bash
 ./target/release/soltrace-backfill \
-  --programs "ProgramID1" \
+  --programs "YourProgramId1" \
   --limit 1000 \
   --idl-dir ./idls \
+  --db-url sqlite:./soltrace.db \
   --batch-size 100 \
   --batch-delay 100
 ```
 
-**Note:** The backfiller uses `get_signatures_for_address` to fetch the latest N transactions that call your program. See [BACKFILL_REFACTOR.md](BACKFILL_REFACTOR.md) for details.
-
-## Configuration
-
-You can also use environment variables or a `.env` file:
-
-```env
-SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-SOLANA_WS_URL=wss://api.mainnet-beta.solana.com
-DB_URL=sqlite:./soltrace.db
-IDL_DIR=./idls
-```
-
 ## Architecture
+
+### Directory Structure
 
 ```
 soltrace/
-├── soltrace-core/       # Shared library
-│   ├── idl.rs           # IDL parsing
-│   ├── event.rs         # Event decoding
-│   ├── db.rs            # Database operations
-│   └── types.rs         # Shared types
-├── soltrace-live/       # Real-time tracker
-│   └── main.rs          # WebSocket subscription
-└── soltrace-backfill/   # Historical backfiller
-    └── main.rs          # RPC polling
+├── Cargo.toml                    # Workspace configuration
+├── Cargo.lock                    # Dependency lock file
+├── docker-compose.yml            # Docker Compose services
+├── Dockerfile                    # Multi-stage Docker build
+├── .env.example                  # Example environment variables
+├── soltrace-core/               # Core library crate
+│   └── src/
+│       ├── lib.rs               # Library exports
+│       ├── idl.rs               # IDL parsing and discriminator calculation
+│       ├── idl_event.rs         # IDL-based event decoder using anchor_lang
+│       ├── event.rs             # EventDecoder with IDL integration
+│       ├── db.rs                # SQLite database operations
+│       ├── types.rs             # Core types (DecodedEvent, RawEvent, etc.)
+│       ├── utils.rs             # Utility functions (load_idls, extract_event_from_log)
+│       ├── retry.rs             # Retry logic with exponential backoff
+│       ├── validation.rs        # Input validation helpers
+│       ├── metrics.rs           # Health check and metrics
+│       └── error.rs             # Error types and handling
+├── soltrace-live/               # Real-time indexer binary
+│   └── src/
+│       └── main.rs              # WebSocket subscription and event processing
+└── soltrace-backfill/           # Historical backfill binary
+    └── src/
+        └── main.rs              # RPC-based historical event fetching
 ```
 
-## Usage Examples
+### Data Flow
 
-### Index a Single Program
-
-```bash
-soltrace-live run \
-  --programs "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" \
-  --idl-dir ./idls
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Solana Network │     │  Soltrace Indexer │     │   SQLite DB     │
+│                 │     │                  │     │                 │
+│  ┌───────────┐  │     │  ┌─────────────┐  │     │  ┌───────────┐  │
+│  │WebSocket  │──┼─────┼─▶│Log Extractor│  │     │  │  events   │  │
+│  │  Logs     │  │     │  │             │  │     │  │   table   │  │
+│  └───────────┘  │     │  └──────┬──────┘  │     │  └───────────┘  │
+│                 │     │         │         │     │                 │
+│  ┌───────────┐  │     │  ┌──────▼──────┐  │     │                 │
+│  │  RPC API  │──┼─────┼─▶│IDL Decoder  │  │     │                 │
+│  │           │  │     │  │(anchor_lang)│  │     │                 │
+│  └───────────┘  │     │  └──────┬──────┘  │     │                 │
+│                 │     │         │         │     │                 │
+└─────────────────┘     │  ┌──────▼──────┐  │     └─────────────────┘
+                        │  │  Database   │──┼────────────────────────▶
+                        │  │   Insert    │  │
+                        │  └─────────────┘  │
+                        └───────────────────┘
 ```
 
-### Index Multiple Programs
+### Key Components
 
-```bash
-soltrace-live run \
-  --programs "Prog1...,Prog2...,Prog3..." \
-  --idl-dir ./idls
-```
+**IDL Parser (`idl.rs`)**
 
-### Backfill Latest Transactions
+- Loads and parses Anchor IDL JSON files
+- Calculates event discriminators using `sha256("event:<name>")[..8]`
+- Maps discriminators to event definitions
 
-```bash
-# Backfill last 1000 transactions calling your program
-soltrace-backfill \
-  --programs "YourProgramID" \
-  --limit 1000 \
-  --idl-dir ./idls
-```
+**Event Decoder (`idl_event.rs` + `event.rs`)**
 
-### Backfill Multiple Programs
+- Uses `anchor_lang` utilities for type-safe borsh deserialization
+- Supports all Anchor types: bool, u8-128, i8-128, string, Pubkey, bytes, Option<T>, Vec<T>, arrays
+- Falls back to hex encoding on decoding failures
 
-```bash
-soltrace-backfill \
-  --programs "Prog1...,Prog2...,Prog3..." \
-  --limit 500 \
-  --batch-size 50
-```
+**Database (`db.rs`)**
 
-### Query Events
+- SQLite with SQLx async queries
+- Automatic migrations on startup
+- Event deduplication via unique constraint
 
-You can query the SQLite database directly:
+**Real-Time Indexer (`soltrace-live`)**
 
-```bash
-# All events from a program
-sqlite3 soltrace.db "SELECT * FROM events WHERE program_id = 'YourProgramID' LIMIT 10;"
+- WebSocket connection to Solana via `PubsubClient`
+- Exponential backoff reconnection (capped at 15 minutes)
+- Async log processing with bounded channel
+- Supports multiple program subscriptions
 
-# Events by type
-sqlite3 soltrace.db "SELECT * FROM events WHERE event_name = 'Transfer';"
+**Historical Backfill (`soltrace-backfill`)**
 
-# Events in slot range
-sqlite3 soltrace.db "SELECT * FROM events WHERE slot BETWEEN 123456 AND 123500;"
-```
+- Uses `get_signatures_for_address` for historical data
+- Concurrent transaction processing (configurable)
+- Rate limit handling with retry
+- Deduplication across programs
 
-## Database Schema
+### Database Schema
 
 ```sql
 CREATE TABLE events (
@@ -200,85 +287,379 @@ CREATE TABLE events (
     discriminator TEXT NOT NULL,
     data TEXT NOT NULL,  -- JSON-encoded event data
     timestamp TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL DEFAULT (datetime('utc'))
 );
+
+-- Indexes for common queries
+CREATE INDEX idx_events_program_id ON events(program_id);
+CREATE INDEX idx_events_event_name ON events(event_name);
+CREATE INDEX idx_events_timestamp ON events(timestamp);
+CREATE INDEX idx_events_signature ON events(signature);
 ```
 
-## Migration to PostgreSQL/TimescaleDB
+## Configuration
 
-To migrate from SQLite to PostgreSQL:
+### IDL File Format
 
-1. Install PostgreSQL + TimescaleDB
-2. Update connection string:
-   ```bash
-   --db-url "postgresql://user:pass@localhost/soltrace"
-   ```
-3. Update `soltrace-core/src/db.rs` to use `sqlx::postgres::PgPool`
-4. Adjust SQL syntax for PostgreSQL
-5. Create hypertable for time-series optimization:
-   ```sql
-   SELECT create_hypertable('events', 'timestamp');
-   ```
+Soltrace expects IDL files in the following format:
 
-See [TECHNICAL.md](TECHNICAL.md) for detailed migration guide.
+```json
+{
+  "version": "0.1.0",
+  "name": "my_program",
+  "address": "YourProgramId1111111111111111111111111111111",
+  "events": [
+    {
+      "name": "Transfer",
+      "fields": [
+        {
+          "name": "from",
+          "type": "publicKey"
+        },
+        {
+          "name": "to",
+          "type": "publicKey"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ]
+}
+```
 
-## Development
+Supported field types:
+
+- `bool` - Boolean
+- `u8`, `u16`, `u32` - Unsigned integers (JSON number)
+- `u64`, `u128` - Large unsigned integers (JSON string)
+- `i8`, `i16`, `i32` - Signed integers (JSON number)
+- `i64`, `i128` - Large signed integers (JSON string)
+- `string` - UTF-8 string
+- `publicKey`, `pubkey`, `Pubkey` - Solana public key (32 bytes)
+- `bytes` - Byte array (hex-encoded)
+- `option<T>` - Optional value
+- `vec<T>` - Vector of type T
+- `[T; N]` - Fixed-size array
+
+## Environment Variables
+
+| Variable          | Description                          | Default                               |
+| ----------------- | ------------------------------------ | ------------------------------------- |
+| `SOLANA_RPC_URL`  | Solana HTTP RPC endpoint             | `https://api.mainnet-beta.solana.com` |
+| `SOLANA_WS_URL`   | Solana WebSocket endpoint            | `wss://api.mainnet-beta.solana.com`   |
+| `PROGRAM_IDS`     | Comma-separated program IDs to index | (required)                            |
+| `DB_URL`          | Database connection string           | `sqlite:./data/soltrace.db`           |
+| `IDL_DIR`         | Directory containing IDL files       | `./idls`                              |
+| `COMMITMENT`      | Solana commitment level              | `confirmed`                           |
+| `RECONNECT_DELAY` | WebSocket reconnect delay (seconds)  | `5`                                   |
+| `LIMIT`           | Number of signatures to backfill     | `1000`                                |
+| `BATCH_SIZE`      | Concurrent fetch batch size          | `100`                                 |
+| `BATCH_DELAY`     | Delay between batches (ms)           | `100`                                 |
+| `LOG_LEVEL`       | Logging verbosity                    | `info`                                |
+
+## Available Commands
+
+### soltrace-live
+
+```bash
+# Initialize database
+soltrace-live init --db-url <DATABASE_URL>
+
+# Start real-time indexing
+soltrace-live run \
+  --programs <PROGRAM_IDS> \
+  --ws-url <WS_URL> \
+  --rpc-url <RPC_URL> \
+  --db-url <DB_URL> \
+  --idl-dir <IDL_DIR> \
+  --commitment <confirmed|processed|finalized> \
+  --reconnect-delay <SECONDS> \
+  --max-reconnects <COUNT>
+```
+
+### soltrace-backfill
+
+```bash
+soltrace-backfill \
+  --programs <PROGRAM_IDS> \
+  --rpc-url <RPC_URL> \
+  --db-url <DB_URL> \
+  --idl-dir <IDL_DIR> \
+  --limit <COUNT> \
+  --batch-size <SIZE> \
+  --batch-delay <MS> \
+  --concurrency <COUNT> \
+  --max-retries <COUNT>
+```
+
+## Testing
 
 ### Running Tests
 
 ```bash
+# Run all tests
 cargo test
+
+# Run tests with output
+cargo test -- --nocapture
+
+# Run specific package tests
+cargo test --package soltrace-core
+
+# Run tests in release mode
+cargo test --release
 ```
 
-### Building Documentation
+### Test Coverage
+
+The project includes unit tests for:
+
+- IDL parsing and discriminator calculation
+- Event decoding (all supported types)
+- Database operations
+- Retry logic
+- Validation functions
+- Utility functions
+
+### Code Quality
 
 ```bash
-cargo doc --open
-```
-
-### Code Style
-
-This project uses standard Rust formatting:
-
-```bash
+# Format code
 cargo fmt
+
+# Run linter
 cargo clippy
+
+# Run linter with all features
+cargo clippy --all-features
+
+# Check for security vulnerabilities
+cargo audit
+```
+
+## Deployment
+
+### Docker (Recommended)
+
+Build and run with Docker Compose:
+
+```bash
+# Build images
+docker-compose build
+
+# Start services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f soltrace-live
+
+# Stop services
+docker-compose down
+
+# Remove volumes (WARNING: deletes database)
+docker-compose down -v
+```
+
+### Docker Configuration
+
+The `docker-compose.yml` includes two services:
+
+1. **soltrace-live**: Real-time indexer with auto-restart
+2. **soltrace-backfill**: One-time historical backfill (runs after live starts)
+
+Both services share:
+
+- Named volume for database persistence
+- IDL directory mount (read-only)
+- Environment variables from `.env`
+
+### Manual Deployment
+
+```bash
+# Build release binary
+cargo build --release
+
+# Copy binary to server
+scp target/release/soltrace-live user@server:/opt/soltrace/
+
+# Run with systemd (example service file)
+cat > /etc/systemd/system/soltrace.service << 'EOF'
+[Unit]
+Description=Soltrace Live Indexer
+After=network.target
+
+[Service]
+Type=simple
+User=soltrace
+WorkingDirectory=/opt/soltrace
+Environment=DB_URL=sqlite:./data/soltrace.db
+Environment=PROGRAM_IDS=YourProgramId
+ExecStart=/opt/soltrace/soltrace-live run --programs ${PROGRAM_IDS} --db-url ${DB_URL}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start
+systemctl enable soltrace
+systemctl start soltrace
+```
+
+### Kubernetes
+
+Example deployment manifest:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soltrace-live
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soltrace-live
+  template:
+    metadata:
+      labels:
+        app: soltrace-live
+    spec:
+      containers:
+        - name: soltrace
+          image: your-registry/soltrace:latest
+          env:
+            - name: PROGRAM_IDS
+              value: "YourProgramId"
+            - name: DB_URL
+              value: "sqlite:/data/soltrace.db"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: idls
+              mountPath: /idls
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: soltrace-data
+        - name: idls
+          configMap:
+            name: soltrace-idls
 ```
 
 ## Troubleshooting
 
-### WebSocket Connection Failed
+### WebSocket Connection Issues
 
-- Ensure you're using a valid WebSocket URL (`wss://` for secure)
-- Check firewall rules
-- Try using a different RPC endpoint
+**Error**: `Failed to connect to WebSocket`
+
+**Solutions**:
+
+1. Verify WebSocket URL uses `wss://` for secure connections
+2. Check firewall rules allow outbound WebSocket connections
+3. Try alternate RPC endpoints (Helius, QuickNode, etc.)
+4. Increase `--reconnect-delay` for unstable connections
 
 ### Events Not Decoding
 
-- Verify IDL file matches the program version
-- Check that the program ID in the IDL matches the actual program
-- Look for discriminator calculation errors in logs
+**Error**: `No event found with discriminator` or `Failed to decode event`
+
+**Solutions**:
+
+1. Verify IDL file matches the deployed program version
+2. Check program ID in IDL matches actual on-chain program
+3. Ensure IDL events array includes all event definitions
+4. Check logs for discriminator mismatches
+5. Verify field types in IDL match program implementation
 
 ### RPC Rate Limiting
 
-- Increase `--batch-delay` in backfill mode
-- Reduce `--batch-size` to make smaller requests
-- Consider using a dedicated RPC provider
+**Error**: `429 Too Many Requests`
 
-## Roadmap
+**Solutions**:
 
-- [ ] Full type-aware event decoding
-- [ ] GraphQL API for querying events
-- [ ] Web UI for event browsing
-- [ ] Event filters and subscriptions
-- [ ] Reorg handling and rollback support
-- [ ] Prometheus metrics
-- [ ] Docker support
-- [ ] Continuous aggregates for analytics
+1. Increase `--batch-delay` in backfill mode
+2. Reduce `--batch-size` and `--concurrency`
+3. Use dedicated RPC provider (Helius, QuickNode, Alchemy)
+4. Enable retry logic with `--max-retries 5`
 
-## Contributing
+### Database Issues
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+**Error**: `UNIQUE constraint failed`
+
+**This is normal** - indicates duplicate event detection working correctly. Events are only inserted once.
+
+**Error**: `database is locked`
+
+**Solutions**:
+
+1. Use PostgreSQL for high-concurrency scenarios
+2. Increase SQLite busy timeout
+3. Reduce concurrency settings
+
+### Build Errors
+
+**Error**: `linker cc not found`
+
+**Solutions**:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install build-essential
+
+# macOS
+xcode-select --install
+
+# Arch
+sudo pacman -S base-devel
+```
+
+**Error**: `cannot find -lsqlite3`
+
+**Solutions**:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install libsqlite3-dev
+
+# macOS
+brew install sqlite
+```
+
+## Querying Events
+
+Query the SQLite database directly:
+
+```bash
+# All events from a program
+sqlite3 soltrace.db "SELECT * FROM events WHERE program_id = 'YourProgramId' LIMIT 10;"
+
+# Events by type
+sqlite3 soltrace.db "SELECT * FROM events WHERE event_name = 'Transfer';"
+
+# Events in slot range
+sqlite3 soltrace.db "SELECT * FROM events WHERE slot BETWEEN 123456 AND 123500;"
+
+# Event count by program
+sqlite3 soltrace.db "SELECT program_id, event_name, COUNT(*) FROM events GROUP BY program_id, event_name;"
+
+# Recent events
+sqlite3 soltrace.db "SELECT * FROM events ORDER BY timestamp DESC LIMIT 100;"
+```
+
+## Additional Documentation
+
+- [Docker Setup Guide](docs/DOCKER_SETUP.md) - Detailed Docker deployment instructions
+- [Docker Operations](docs/DOCKER.md) - Docker commands and troubleshooting
+- [Technical Documentation](docs/TECHNICAL.md) - Architecture and implementation details
+- [Live Refactor Guide](docs/LIVE_REFACTOR.md) - WebSocket implementation details
+- [Backfill Refactor Guide](docs/BACKFILL_REFACTOR.md) - Historical indexing implementation
+- [IDL Example](docs/IDL_EXAMPLE.md) - Example IDL format
+- [PubsubClient Guide](docs/PUBSUB_CLIENT.md) - Solana PubsubClient API usage
 
 ## License
 
@@ -289,23 +670,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Built with [Anchor](https://www.anchor-lang.com/)
 - Uses [Solana Rust SDK](https://github.com/solana-labs/solana)
 - Database powered by [SQLx](https://github.com/launchbadge/sqlx)
-
-## Support
-
-### Documentation
-
-- 📖 [Technical Documentation](TECHNICAL.md) - Architecture and database details
-- 🔄 [Live Refactor Guide](LIVE_REFACTOR.md) - WebSocket implementation and auto-reconnect
-- 🚀 [PubsubClient Guide](PUBSUB_CLIENT.md) - Official PubsubClient API usage
-- 📊 [Backfill Refactor Guide](BACKFILL_REFACTOR.md) - RPC-based historical indexing
-- 🐳 [Docker Guide](DOCKER.md) - **Docker deployment and Docker Compose**
-- 🐳 [Docker Migration](PUBSUB_MIGRATION.md) - PubsubClient migration summary
-- 📝 [IDL Examples](IDL_EXAMPLE.md) - Example IDL format for testing
-
-### Getting Help
-
-- 🐛 [Issue Tracker](https://github.com/your-org/soltrace/issues)
-- 💬 [Discord](https://discord.gg/your-discord)
+- Async runtime by [Tokio](https://tokio.rs/)
 
 ---
 

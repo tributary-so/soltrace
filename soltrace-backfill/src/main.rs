@@ -24,31 +24,31 @@ use tokio::task;
 #[command(about = "Backfill historical Solana events from RPC", long_about = None)]
 struct Cli {
     /// Solana RPC URL
-    #[arg(short, long, default_value = "https://api.mainnet-beta.solana.com")]
+    #[arg(short, long, default_value = "https://api.mainnet-beta.solana.com", env("SOLANA_RPC_URL"))]
     rpc_url: String,
 
     /// Comma-separated list of program IDs to index
-    #[arg(short, long)]
+    #[arg(short, long, env("PROGRAM_IDS"))]
     programs: String,
 
     /// Database URL
-    #[arg(short, long, default_value = "sqlite:./soltrace.db")]
+    #[arg(short, long, default_value = "sqlite:./soltrace.db", env("DB_URL"))]
     db_url: String,
 
     /// IDL directory path
-    #[arg(short, long, default_value = "./idls")]
+    #[arg(short, long, default_value = "./idls", env("IDL_DIR"))]
     idl_dir: String,
 
     /// Number of signatures to fetch (latest N transactions)
-    #[arg(short, long, default_value = "1000")]
+    #[arg(short, long, default_value = "1000", env("LIMIT"))]
     limit: u64,
 
     /// Batch size for fetching transactions
-    #[arg(short, long, default_value = "100")]
+    #[arg(short = 'b', long, default_value = "100", env("BATCH_SIZE"))]
     batch_size: usize,
 
     /// Delay between batches (milliseconds)
-    #[arg(short, long, default_value = "100")]
+    #[arg(short = 'w', long, default_value = "100", env("BATCH_DELAY"))]
     batch_delay: u64,
 
     /// Number of concurrent transaction fetches
