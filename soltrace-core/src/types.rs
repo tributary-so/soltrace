@@ -94,9 +94,39 @@ impl ProgramPrefixConfig {
         }
     }
 
+    /// Add a program_id:prefix mapping (e.g., "TRibg8W8z...:tributary")
     pub fn add_mapping(&mut self, program_id: &str, prefix: &str) {
         self.program_mappings
             .insert(program_id.to_string(), prefix.to_string());
+    }
+
+    /// Add program_id:prefix mappings from colon-separated string
+    /// Format: "id1:prefix1,id2:prefix2"
+    pub fn add_mappings_from_string(&mut self, mappings_str: &str) {
+        for mapping in mappings_str.split(',') {
+            let mapping = mapping.trim();
+            if let Some((program_id, prefix)) = mapping.split_once(':') {
+                let program_id = program_id.trim();
+                let prefix = prefix.trim();
+                if !program_id.is_empty() && !prefix.is_empty() {
+                    self.add_mapping(program_id, prefix);
+                }
+            }
+        }
+    }
+
+    /// Load program IDs from IDLs and use default prefix for all
+    pub fn load_from_idls(
+        &mut self,
+        idls: &std::collections::HashMap<String, crate::types::ParsedIdl>,
+    ) {
+        for (program_id, _) in idls {
+            if !self.program_mappings.contains_key(program_id) {
+                self.program_mappings
+                    .entry(program_id.clone())
+                    .or_insert_with(|| self.default_prefix.clone());
+            }
+        }
     }
 
     pub fn get_prefix(&self, program_id: &str) -> String {
@@ -104,6 +134,11 @@ impl ProgramPrefixConfig {
             .get(program_id)
             .cloned()
             .unwrap_or_else(|| self.default_prefix.clone())
+    }
+
+    /// Get all configured program IDs
+    pub fn get_program_ids(&self) -> Vec<String> {
+        self.program_mappings.keys().cloned().collect()
     }
 }
 

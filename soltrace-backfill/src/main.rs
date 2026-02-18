@@ -28,9 +28,9 @@ struct Cli {
     )]
     rpc_url: String,
 
-    /// Comma-separated list of program IDs to index
-    #[arg(short, long, env("PROGRAM_IDS"))]
-    programs: String,
+    /// Program prefix mappings (format: program_id:prefix, e.g., "TRibg8...:tributary")
+    #[arg(short = 'm', long, env("PROGRAM_PREFIXES"))]
+    program_prefixes: String,
 
     /// Database URL
     #[arg(short, long, default_value = "sqlite:./soltrace.db", env("DB_URL"))]
@@ -88,29 +88,7 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     info!("Concurrency: {}", cli.concurrency);
     info!("Max retries: {}", cli.max_retries);
 
-    // Parse program IDs
-    let program_ids: Vec<String> = cli
-        .programs
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if program_ids.is_empty() {
-        error!("No program IDs specified. Use --programs <id1,id2,...>");
-        return Ok(());
-    }
-
-    info!("Indexing {} program(s):", program_ids.len());
-    for pid in &program_ids {
-        info!("  - {}", pid);
-    }
-
-    // Initialize database
-    let db = Arc::new(Database::new(&cli.db_url).await?);
-    info!("Database connected: {}", cli.db_url);
-
-    // Load IDLs
+    // Load IDLs first to extract program IDs
     let mut idl_parser = IdlParser::new();
     load_idls(&mut idl_parser, &cli.idl_dir).await?;
 
@@ -120,16 +98,37 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         info!("  - {}: {} events", addr, idl.events.len());
     }
 
-    // Create program prefix configuration
+    // Create program prefix configuration from CLI/env
     let mut prefix_config = ProgramPrefixConfig::new();
-    // You can add custom prefixes for specific programs here
-    // prefix_config.add_mapping("TRibg8W8zmPHQqWtyAD1rEBRXEdyU13Mu6qX1Sg42tJ", "tributary");
-    for program_id in &program_ids {
-        prefix_config.add_mapping(program_id, "tributary");
+    // Load programs from IDLs with default prefix
+    prefix_config.load_from_idls(loaded_idls);
+    // Apply custom prefix mappings from CLI/env
+    if !cli.program_prefixes.is_empty() {
+        prefix_config.add_mappings_from_string(&cli.program_prefixes);
+        info!(
+            "Applied {} custom program prefix mapping(s)",
+            cli.program_prefixes
+        );
+    }
+
+    let program_ids = prefix_config.get_program_ids();
+    if program_ids.is_empty() {
+        error!("No IDLs found in directory. Use --idl-dir <path>");
+        return Ok(());
+    }
+
+    info!("Indexing {} program(s):", program_ids.len());
+    for pid in &program_ids {
+        let prefix = prefix_config.get_prefix(pid);
+        info!("  - {} (prefix: {})", pid, prefix);
     }
 
     // Create event decoder
     let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
+
+    // Initialize database
+    let db = Arc::new(Database::new(&cli.db_url).await?);
+    info!("Database connected: {}", cli.db_url);
 
     // Initialize RPC client
     let rpc_client = Arc::new(RpcClient::new(cli.rpc_url));

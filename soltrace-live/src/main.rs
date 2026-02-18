@@ -53,9 +53,9 @@ enum Commands {
         )]
         rpc_url: String,
 
-        /// Comma-separated list of program IDs to index
-        #[arg(short, long, env("PROGRAM_IDS"))]
-        programs: String,
+        /// Program prefix mappings (format: program_id:prefix, e.g., "TRibg8...:tributary")
+        #[arg(short = 'm', long, env("PROGRAM_PREFIXES"))]
+        program_prefixes: String,
 
         /// Database URL
         #[arg(short, long, default_value = "sqlite:./soltrace.db", env("DB_URL"))]
@@ -98,7 +98,7 @@ async fn main() -> Result<()> {
         Commands::Run {
             ws_url,
             rpc_url,
-            programs,
+            program_prefixes,
             db_url,
             idl_dir,
             commitment,
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
             run_indexer(
                 ws_url,
                 rpc_url,
-                programs,
+                program_prefixes,
                 db_url,
                 idl_dir,
                 commitment,
@@ -134,7 +134,7 @@ async fn init_db(db_url: &str) -> Result<()> {
 async fn run_indexer(
     ws_url: String,
     rpc_url: String,
-    programs: String,
+    program_prefixes: String,
     db_url: String,
     idl_dir: String,
     commitment: String,
@@ -147,30 +147,11 @@ async fn run_indexer(
     info!("Commitment: {}", commitment);
     info!("Reconnect delay: {}s", reconnect_delay);
 
-    // Parse and validate program IDs
-    let program_ids: Vec<Pubkey> = programs
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.parse::<Pubkey>())
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!("Failed to parse program IDs: {}", e))?;
-
-    if program_ids.is_empty() {
-        error!("No program IDs specified. Use --programs <id1,id2,...>");
-        return Ok(());
-    }
-
-    info!("Indexing {} program(s):", program_ids.len());
-    for pid in &program_ids {
-        info!("  - {}", pid);
-    }
-
     // Initialize database
     let db = Arc::new(Database::new(&db_url).await?);
     info!("Database connected: {}", db_url);
 
-    // Load IDLs
+    // Load IDLs first to extract program IDs
     let mut idl_parser = IdlParser::new();
     load_idls(&mut idl_parser, &idl_dir).await?;
 
@@ -180,12 +161,31 @@ async fn run_indexer(
         info!("  - {}: {} events", addr, idl.events.len());
     }
 
-    // Create program prefix configuration
+    // Create program prefix configuration from CLI/env
     let mut prefix_config = ProgramPrefixConfig::new();
-    // Add default prefix for all programs
-    for program_id in &program_ids {
-        prefix_config.add_mapping(&program_id.to_string(), "tributary");
+    // Load programs from IDLs with default prefix
+    prefix_config.load_from_idls(loaded_idls);
+    // Apply custom prefix mappings from CLI/env
+    if !program_prefixes.is_empty() {
+        prefix_config.add_mappings_from_string(&program_prefixes);
+        info!(
+            "Applied {} custom program prefix mapping(s)",
+            program_prefixes
+        );
     }
+
+    let program_ids = prefix_config.get_program_ids();
+    if program_ids.is_empty() {
+        error!("No IDLs found in directory. Use --idl-dir <path>");
+        return Ok(());
+    }
+
+    // Convert program IDs to Pubkeys for WebSocket subscription
+    let pubkeys: Vec<Pubkey> = program_ids
+        .iter()
+        .map(|s| s.parse::<Pubkey>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("Failed to parse program IDs: {}", e))?;
 
     // Create event decoder
     let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
@@ -196,7 +196,7 @@ async fn run_indexer(
     // Start WebSocket subscription with auto-reconnect
     run_websocket_loop(
         &ws_url,
-        &program_ids,
+        &pubkeys,
         event_decoder,
         db,
         &commitment,
