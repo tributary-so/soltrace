@@ -1,0 +1,28 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  test:
+    name: Cargo tests
+    uses: ./.github/workflows/test.yaml
+
+  build-api-docker:
+    name: Build Docker Image
+    permissions:
+      packages: write
+      contents: read
+    uses: ./.github/workflows/build-docker-image.yaml
+    with:
+      registry: ghcr.io
+      package: soltrace
+      version: "${{ github.event.workflow_run.head_branch }}.${{ github.event.workflow_run.run_number }}"
