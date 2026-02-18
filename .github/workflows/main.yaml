@@ -18,6 +18,7 @@ jobs:
 
   build-api-docker:
     name: Build Docker Image
+    needs: [test]
     permissions:
       packages: write
       contents: read
