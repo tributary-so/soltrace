@@ -1,0 +1,2851 @@
+{
+  "address": "TRibg8W8zmPHQqWtyAD1rEBRXEdyU13Mu6qX1Sg42tJ",
+  "metadata": {
+    "name": "tributary",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "change_gateway_fee_bps",
+      "discriminator": [
+        129,
+        65,
+        3,
+        111,
+        65,
+        208,
+        146,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "change_gateway_fee_recipient",
+      "discriminator": [
+        73,
+        254,
+        67,
+        5,
+        32,
+        147,
+        202,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "new_fee_recipient",
+          "docs": [
+            "be used to derive the associated token account from. So we don't have to check anything",
+            "really, FIXME: do we?"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "change_gateway_signer",
+      "discriminator": [
+        212,
+        253,
+        96,
+        169,
+        171,
+        244,
+        137,
+        144
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "new_signer"
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "change_payment_policy_status",
+      "discriminator": [
+        250,
+        83,
+        53,
+        119,
+        200,
+        114,
+        9,
+        132
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user_payment",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint"
+        },
+        {
+          "name": "payment_policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user_payment"
+              },
+              {
+                "kind": "arg",
+                "path": "policy_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "policy_id",
+          "type": "u32"
+        },
+        {
+          "name": "new_status",
+          "type": {
+            "defined": {
+              "name": "PaymentStatus"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_payment_gateway",
+      "discriminator": [
+        186,
+        227,
+        210,
+        95,
+        154,
+        36,
+        146,
+        9
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fee_recipient"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "gateway_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "name",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "url",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_payment_policy",
+      "discriminator": [
+        32,
+        50,
+        29,
+        251,
+        174,
+        23,
+        112,
+        121
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user_payment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "recipient",
+          "docs": [
+            "corresponding tokenAccount/ata will be derived during execution."
+          ]
+        },
+        {
+          "name": "token_mint"
+        },
+        {
+          "name": "gateway",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "gateway.authority",
+                "account": "PaymentGateway"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_policy",
+          "writable": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "policy_type",
+          "type": {
+            "defined": {
+              "name": "PolicyType"
+            }
+          }
+        },
+        {
+          "name": "memo",
+          "type": {
+            "array": [
+              "u8",
+              64
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_referral_account",
+      "discriminator": [
+        235,
+        55,
+        82,
+        230,
+        52,
+        35,
+        56,
+        210
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "referral_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  102,
+                  101,
+                  114,
+                  114,
+                  97,
+                  108
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "gateway"
+              },
+              {
+                "kind": "arg",
+                "path": "referral_code"
+              }
+            ]
+          }
+        },
+        {
+          "name": "gateway",
+          "docs": [
+            "The gateway this referral account belongs to"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "referral_code",
+          "type": {
+            "array": [
+              "u8",
+              6
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "create_user_payment",
+      "discriminator": [
+        115,
+        54,
+        209,
+        72,
+        127,
+        194,
+        206,
+        49
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user_payment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_account"
+        },
+        {
+          "name": "token_mint"
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "delete_payment_gateway",
+      "discriminator": [
+        222,
+        101,
+        255,
+        134,
+        63,
+        41,
+        248,
+        139
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "delete_payment_policy",
+      "discriminator": [
+        146,
+        180,
+        143,
+        169,
+        50,
+        40,
+        146,
+        86
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "user_payment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_mint"
+        },
+        {
+          "name": "payment_policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user_payment"
+              },
+              {
+                "kind": "arg",
+                "path": "policy_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "policy_id",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "execute_payment",
+      "discriminator": [
+        86,
+        4,
+        7,
+        7,
+        120,
+        139,
+        232,
+        139
+      ],
+      "accounts": [
+        {
+          "name": "fee_payer",
+          "signer": true
+        },
+        {
+          "name": "payments_delegate",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116,
+                  115
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "payment_policy",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116,
+                  95,
+                  112,
+                  111,
+                  108,
+                  105,
+                  99,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payment_policy.user_payment",
+                "account": "PaymentPolicy"
+              },
+              {
+                "kind": "account",
+                "path": "payment_policy.policy_id",
+                "account": "PaymentPolicy"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_payment",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  101,
+                  114,
+                  95,
+                  112,
+                  97,
+                  121,
+                  109,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user_payment.owner",
+                "account": "UserPayment"
+              },
+              {
+                "kind": "account",
+                "path": "user_payment.token_mint",
+                "account": "UserPayment"
+              }
+            ]
+          }
+        },
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "gateway.authority",
+                "account": "PaymentGateway"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user_token_account",
+          "writable": true
+        },
+        {
+          "name": "recipient_token_account",
+          "writable": true
+        },
+        {
+          "name": "gateway_fee_account",
+          "writable": true
+        },
+        {
+          "name": "protocol_fee_account",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "payment_amount",
+          "type": {
+            "option": "u64"
+          }
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_gateway_protocol_fee",
+      "discriminator": [
+        64,
+        116,
+        3,
+        107,
+        10,
+        191,
+        237,
+        130
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority"
+        },
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "UpdateGatewayProtocolFeeArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_gateway_referral_settings",
+      "discriminator": [
+        243,
+        85,
+        199,
+        210,
+        27,
+        35,
+        250,
+        84
+      ],
+      "accounts": [
+        {
+          "name": "gateway",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  97,
+                  116,
+                  101,
+                  119,
+                  97,
+                  121
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "UpdateGatewayReferralSettingsArgs"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "PaymentGateway",
+      "discriminator": [
+        200,
+        101,
+        8,
+        23,
+        141,
+        157,
+        106,
+        112
+      ]
+    },
+    {
+      "name": "PaymentPolicy",
+      "discriminator": [
+        48,
+        74,
+        183,
+        94,
+        41,
+        92,
+        52,
+        44
+      ]
+    },
+    {
+      "name": "ProgramConfig",
+      "discriminator": [
+        196,
+        210,
+        90,
+        231,
+        144,
+        149,
+        140,
+        63
+      ]
+    },
+    {
+      "name": "ReferralAccount",
+      "discriminator": [
+        237,
+        162,
+        80,
+        78,
+        196,
+        233,
+        91,
+        2
+      ]
+    },
+    {
+      "name": "UserPayment",
+      "discriminator": [
+        115,
+        161,
+        14,
+        69,
+        223,
+        123,
+        210,
+        9
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "GatewayFeeBpsChanged",
+      "discriminator": [
+        124,
+        209,
+        135,
+        122,
+        9,
+        238,
+        74,
+        234
+      ]
+    },
+    {
+      "name": "GatewayFeeRecipientChanged",
+      "discriminator": [
+        105,
+        68,
+        6,
+        243,
+        153,
+        138,
+        169,
+        146
+      ]
+    },
+    {
+      "name": "GatewaySignerChanged",
+      "discriminator": [
+        123,
+        161,
+        22,
+        153,
+        186,
+        125,
+        49,
+        187
+      ]
+    },
+    {
+      "name": "PaymentGatewayCreated",
+      "discriminator": [
+        117,
+        71,
+        161,
+        238,
+        28,
+        132,
+        111,
+        238
+      ]
+    },
+    {
+      "name": "PaymentGatewayDeleted",
+      "discriminator": [
+        159,
+        159,
+        169,
+        53,
+        140,
+        91,
+        101,
+        217
+      ]
+    },
+    {
+      "name": "PaymentPolicyCreated",
+      "discriminator": [
+        183,
+        14,
+        150,
+        236,
+        3,
+        166,
+        91,
+        44
+      ]
+    },
+    {
+      "name": "PaymentPolicyDeleted",
+      "discriminator": [
+        164,
+        228,
+        135,
+        36,
+        87,
+        156,
+        237,
+        126
+      ]
+    },
+    {
+      "name": "PaymentPolicyStatusChanged",
+      "discriminator": [
+        66,
+        140,
+        136,
+        203,
+        34,
+        132,
+        190,
+        93
+      ]
+    },
+    {
+      "name": "PaymentRecord",
+      "discriminator": [
+        42,
+        100,
+        253,
+        124,
+        170,
+        186,
+        231,
+        186
+      ]
+    },
+    {
+      "name": "ProgramConfigCreated",
+      "discriminator": [
+        96,
+        218,
+        177,
+        136,
+        188,
+        157,
+        105,
+        177
+      ]
+    },
+    {
+      "name": "ReferralRewardDistributedRecord",
+      "discriminator": [
+        91,
+        128,
+        157,
+        110,
+        236,
+        68,
+        237,
+        14
+      ]
+    },
+    {
+      "name": "UserPaymentCreated",
+      "discriminator": [
+        112,
+        162,
+        36,
+        73,
+        210,
+        62,
+        34,
+        21
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "ProgramPaused",
+      "msg": "Program is paused"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidFrequency",
+      "msg": "Invalid payment frequency"
+    },
+    {
+      "code": 6003,
+      "name": "MaxPoliciesReached",
+      "msg": "Maximum policies per user reached"
+    },
+    {
+      "code": 6004,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidPolicyStatusTransition",
+      "msg": "Invalid policy status transition"
+    },
+    {
+      "code": 6006,
+      "name": "PolicyNotFound",
+      "msg": "Payment policy not found"
+    },
+    {
+      "code": 6007,
+      "name": "InsufficientDelegatedAmount",
+      "msg": "Insufficient delegated amount"
+    },
+    {
+      "code": 6008,
+      "name": "PaymentNotDue",
+      "msg": "Payment is not yet due"
+    },
+    {
+      "code": 6009,
+      "name": "InsufficientBalance",
+      "msg": "Insufficient balance for payment"
+    },
+    {
+      "code": 6010,
+      "name": "NoDelegateSet",
+      "msg": "No or incorrect delegate set in ata"
+    },
+    {
+      "code": 6011,
+      "name": "PolicyPaused",
+      "msg": "Payment policy is paused"
+    },
+    {
+      "code": 6012,
+      "name": "InvalidInterval",
+      "msg": "Invalid Interval"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidFeeBps",
+      "msg": "Invalid fee basis points"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidPaymentDueDate",
+      "msg": "Invalid payment due date"
+    },
+    {
+      "code": 6015,
+      "name": "ArithmeticOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6016,
+      "name": "ReferralFeatureNotEnabled",
+      "msg": "Referral program feature is not enabled"
+    },
+    {
+      "code": 6017,
+      "name": "InvalidReferralAllocation",
+      "msg": "Invalid referral allocation - must be <= 2500 bps"
+    },
+    {
+      "code": 6018,
+      "name": "InvalidReferralTiers",
+      "msg": "Invalid referral tiers - must sum to 10000 bps"
+    },
+    {
+      "code": 6019,
+      "name": "CouldNotDeserializeReferrer",
+      "msg": "Could not deserialize referrer account"
+    },
+    {
+      "code": 6020,
+      "name": "ReferrerMustBeWritable",
+      "msg": "Referrer account must be writable"
+    },
+    {
+      "code": 6021,
+      "name": "CircularReferralChain",
+      "msg": "Circular referral chain detected"
+    },
+    {
+      "code": 6022,
+      "name": "MaxReferralDepthExceeded",
+      "msg": "Maximum referral chain depth exceeded"
+    },
+    {
+      "code": 6023,
+      "name": "InvalidReferralChainOrdering",
+      "msg": "Invalid referral chain ordering in remaining_accounts"
+    },
+    {
+      "code": 6024,
+      "name": "InvalidReferralAccountDiscriminator",
+      "msg": "Invalid referral account discriminator"
+    },
+    {
+      "code": 6025,
+      "name": "ReferralAccountSizeMismatch",
+      "msg": "Referral account size mismatch"
+    },
+    {
+      "code": 6026,
+      "name": "InvalidReferralCode",
+      "msg": "Invalid referral code - must be alphanumeric"
+    },
+    {
+      "code": 6027,
+      "name": "ReferrerAccountInvalid",
+      "msg": "Referrer Account invalid"
+    },
+    {
+      "code": 6028,
+      "name": "ReferrerATAInvalid",
+      "msg": "Referrer ATA invalid"
+    },
+    {
+      "code": 6029,
+      "name": "ReferrerATAMintInvalid",
+      "msg": "Referrer ATA with invalid Mint"
+    },
+    {
+      "code": 6030,
+      "name": "MissingReferralAta",
+      "msg": "Missing ATA for ReferralAccount - each ReferralAccount requires a matching token account"
+    },
+    {
+      "code": 6031,
+      "name": "InvalidTokenAccount",
+      "msg": "Invalid token account - mint mismatch or deserialization failed"
+    },
+    {
+      "code": 6032,
+      "name": "MismatchAtaReferralAccountNumbers",
+      "msg": "Mismatch between number referrers and atas!"
+    },
+    {
+      "code": 6033,
+      "name": "ReferralAccountAlreadyExists",
+      "msg": "Referral account already exists for this code"
+    }
+  ],
+  "types": [
+    {
+      "name": "GatewayFeeBpsChanged",
+      "docs": [
+        "An event that is thrown when a gateway fee bps is changed"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gateway",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "new_fee_bps",
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GatewayFeeRecipientChanged",
+      "docs": [
+        "An event that is thrown when a gateway fee recipient is changed"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gateway",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_fee_recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_fee_recipient",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GatewaySignerChanged",
+      "docs": [
+        "An event that is thrown when a gateway signer is changed"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gateway",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_signer",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_signer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentFrequency",
+      "docs": [
+        "Defines frequency at which recurring payments should occur.",
+        "Predefined intervals are provided for common use cases, with Custom",
+        "allowing arbitrary intervals defined in seconds."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Daily"
+          },
+          {
+            "name": "Weekly"
+          },
+          {
+            "name": "Monthly"
+          },
+          {
+            "name": "Quarterly"
+          },
+          {
+            "name": "SemiAnnually"
+          },
+          {
+            "name": "Annually"
+          },
+          {
+            "name": "Custom",
+            "fields": [
+              "u64"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentGateway",
+      "docs": [
+        "A payment gateway operated by a service provider that executes recurring payments.",
+        "Gateway operators can charge fees for their service and are responsible for",
+        "triggering payment execution. Each gateway has an authority (owner), fee recipient,",
+        "and signer key used to execute payments on behalf of users."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "Authority key that owns this gateway. Cannot be changed after creation."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_recipient",
+            "docs": [
+              "Key that receives gateway fees from processed payments"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "gateway_fee_bps",
+            "docs": [
+              "Gateway fee in basis points (bps). Max 10,000 (100%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "is_active",
+            "docs": [
+              "Whether this gateway is active and can process payments"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "padding1",
+            "docs": [
+              "No-longer-used, take care of tumbstone"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Unix timestamp when gateway was created"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed for address derivation"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "name",
+            "docs": [
+              "Human-readable gateway name (32 bytes max)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "url",
+            "docs": [
+              "Gateway service URL (64 bytes max)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "signer",
+            "docs": [
+              "Signer key authorized to execute payments for this gateway"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "feature_flags",
+            "docs": [
+              "Gateway-scoped feature flags (bit-vector)",
+              "Bit 0: Referral program enabled (1 = enabled, 0 = disabled)",
+              "Bit 1: Net amount mode (1 = net, 0 = gross/default)",
+              "Bit 2: Custom protocol fee enabled (1 = enabled, 0 = disabled)"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "referral_allocation_bps",
+            "docs": [
+              "Gateway-scoped referral program allocation (in basis points)",
+              "0 = no referral program, 2500 = 25% of gateway fee can be used for referrals"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "referral_tiers_bps",
+            "docs": [
+              "Gateway-scoped referral tier distribution as [level1, level2, level3]",
+              "Values are in basis points (e.g., 6000 = 60%). Must sum to 10000 = 100%"
+            ],
+            "type": {
+              "array": [
+                "u16",
+                3
+              ]
+            }
+          },
+          {
+            "name": "custom_protocol_fee_bps",
+            "docs": [
+              "Custom protocol fee in basis points (bps). Only used if use_custom_protocol_fee flag is set.",
+              "When enabled, this overrides the default 100 bps protocol fee."
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "padding",
+            "docs": [
+              "Padding for future fields"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                117
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentGatewayCreated",
+      "docs": [
+        "An event that is thrown when a payment gateway is created"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "gateway_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "name",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "url",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentGatewayDeleted",
+      "docs": [
+        "An event that is thrown when a payment gateway is deleted"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gateway",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "name",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentPolicy",
+      "docs": [
+        "This structure connects a UserPayment (user/mint) with a Policy, a Gateway.",
+        "This is structure that actually specifies subscription payment as you would",
+        "expect from an invoice. The SDK would setup these PaymentPolicy"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user_payment",
+            "docs": [
+              "Reference to the UserPayment account this policy belongs to"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "docs": [
+              "Recipient who receives payments"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "gateway",
+            "docs": [
+              "Payment gateway responsible for executing this policy"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "policy_type",
+            "docs": [
+              "Type and parameters of this payment policy"
+            ],
+            "type": {
+              "defined": {
+                "name": "PolicyType"
+              }
+            }
+          },
+          {
+            "name": "status",
+            "docs": [
+              "Current status of this payment policy"
+            ],
+            "type": {
+              "defined": {
+                "name": "PaymentStatus"
+              }
+            }
+          },
+          {
+            "name": "memo",
+            "docs": [
+              "Human-readable memo/description (64 bytes max)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "total_paid",
+            "docs": [
+              "Total amount paid out under this policy (cumulative)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "payment_count",
+            "docs": [
+              "Number of payments executed under this policy"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Unix timestamp when policy was created"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "docs": [
+              "Unix timestamp when policy was last updated"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "policy_id",
+            "docs": [
+              "Unique identifier for this policy within user_payment scope"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed for address derivation"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "padding",
+            "docs": [
+              "Reserved space for future extensions"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                255
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentPolicyCreated",
+      "docs": [
+        "An event that is thrown when a payment policy is created"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user_payment",
+            "type": "pubkey"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "gateway",
+            "type": "pubkey"
+          },
+          {
+            "name": "policy_id",
+            "type": "u32"
+          },
+          {
+            "name": "policy_type",
+            "type": {
+              "defined": {
+                "name": "PolicyType"
+              }
+            }
+          },
+          {
+            "name": "memo",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "created_policies_count",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentPolicyDeleted",
+      "docs": [
+        "An event that is thrown when a payment policy is deleted"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payment_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "policy_id",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentPolicyStatusChanged",
+      "docs": [
+        "An event that is thrown when a payment policy status is changed"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payment_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "old_status",
+            "type": {
+              "defined": {
+                "name": "PaymentStatus"
+              }
+            }
+          },
+          {
+            "name": "new_status",
+            "type": {
+              "defined": {
+                "name": "PaymentStatus"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentRecord",
+      "docs": [
+        "An event that is thrown when a payment takes place"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payment_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "gateway",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "memo",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          },
+          {
+            "name": "record_id",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PaymentStatus",
+      "docs": [
+        "Status enum for payment policies indicating whether payments can be executed.",
+        "Active policies allow payment execution, while Paused policies prevent",
+        "automatic payment processing until reactivated."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Paused"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PolicyType",
+      "docs": [
+        "The PolicyType enum implements different payment schemes. The initial policy",
+        "will be a subscription payment that enables regular payment according to",
+        "a schedule.",
+        "",
+        "IMPORTANT: All variants MUST be exactly 128 bytes to ensure consistent account sizing",
+        "and enable future enum variant additions without breaking existing accounts."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Subscription",
+            "fields": [
+              {
+                "name": "amount",
+                "type": "u64"
+              },
+              {
+                "name": "auto_renew",
+                "type": "bool"
+              },
+              {
+                "name": "max_renewals",
+                "type": {
+                  "option": "u32"
+                }
+              },
+              {
+                "name": "payment_frequency",
+                "type": {
+                  "defined": {
+                    "name": "PaymentFrequency"
+                  }
+                }
+              },
+              {
+                "name": "next_payment_due",
+                "type": "i64"
+              },
+              {
+                "name": "padding",
+                "type": {
+                  "array": [
+                    "u8",
+                    97
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "Milestone",
+            "fields": [
+              {
+                "name": "milestone_amounts",
+                "type": {
+                  "array": [
+                    "u64",
+                    4
+                  ]
+                }
+              },
+              {
+                "name": "milestone_timestamps",
+                "type": {
+                  "array": [
+                    "i64",
+                    4
+                  ]
+                }
+              },
+              {
+                "name": "current_milestone",
+                "type": "u8"
+              },
+              {
+                "name": "release_condition",
+                "type": "u8"
+              },
+              {
+                "name": "total_milestones",
+                "type": "u8"
+              },
+              {
+                "name": "escrow_amount",
+                "type": "u64"
+              },
+              {
+                "name": "padding",
+                "type": {
+                  "array": [
+                    "u8",
+                    53
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "PayAsYouGo",
+            "fields": [
+              {
+                "name": "max_amount_per_period",
+                "type": "u64"
+              },
+              {
+                "name": "max_chunk_amount",
+                "type": "u64"
+              },
+              {
+                "name": "period_length_seconds",
+                "type": "u64"
+              },
+              {
+                "name": "current_period_start",
+                "type": "i64"
+              },
+              {
+                "name": "current_period_total",
+                "type": "u64"
+              },
+              {
+                "name": "padding",
+                "type": {
+                  "array": [
+                    "u8",
+                    88
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProgramConfig",
+      "docs": [
+        "This is a unique global program configuration managed by an admin that",
+        "defines protocol fees and potentially more."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "docs": [
+              "Admin authority that can update protocol configuration"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_recipient",
+            "docs": [
+              "Key that receives protocol fees from all payments"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "docs": [
+              "Protocol fee in basis points (bps). Max 10,000 (100%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "_deprecated",
+            "docs": [
+              "DEPRECATED: Maximum number of active policies allowed per user. Attention tumbstone!"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "emergency_pause",
+            "docs": [
+              "Emergency pause flag - when true, all payments are blocked"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed for address derivation"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "padding",
+            "docs": [
+              "Reserved space for future extensions"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                256
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProgramConfigCreated",
+      "docs": [
+        "An event that is thrown when program is initialized"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_policies_per_user",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReferralAccount",
+      "docs": [
+        "A referral account that tracks referral codes and chain relationships for reward distribution.",
+        "Each referral account is scoped to a specific gateway to enable gateway-specific referral ecosystems.",
+        "",
+        "The PDA derivation uses gateway pubkey and referral_code to ensure uniqueness:",
+        "PDA seeds: [\"referral\", gateway_pubkey, referral_code]",
+        "",
+        "Uses zero_copy for efficient mutable access during payment execution."
+      ],
+      "serialization": "bytemuck",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "gateway",
+            "docs": [
+              "The gateway this referral account belongs to (for PDA derivation and scoping)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "owner",
+            "docs": [
+              "Authority who owns this referral code and can earn rewards"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "referral_code",
+            "docs": [
+              "6-character alphanumeric referral code"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          },
+          {
+            "name": "_padding_code",
+            "docs": [
+              "Padding for alignment (referrer is 32 bytes, needs 8-byte alignment)"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                2
+              ]
+            }
+          },
+          {
+            "name": "referrer",
+            "docs": [
+              "Referrer who brought this user (for chain traversal). Might be the default Pubkey"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Unix timestamp when account was created"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "total_earned",
+            "docs": [
+              "Total rewards earned by this referrer (in smallest token units)"
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "_padding_bump",
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          },
+          {
+            "name": "_padding",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReferralReward",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "pubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "reward",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReferralRewardDistributedRecord",
+      "docs": [
+        "An event that is thrown when referral rewards are distributed"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payment_policy",
+            "type": "pubkey"
+          },
+          {
+            "name": "gateway",
+            "type": "pubkey"
+          },
+          {
+            "name": "payment_amount",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "rewards",
+            "type": {
+              "array": [
+                {
+                  "option": {
+                    "defined": {
+                      "name": "ReferralReward"
+                    }
+                  }
+                },
+                3
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpdateGatewayProtocolFeeArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "use_custom_protocol_fee",
+            "docs": [
+              "Optional: Enable or disable custom protocol fee feature (bit 2)"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "custom_protocol_fee_bps",
+            "docs": [
+              "Optional custom protocol fee in basis points (bps). Only used if feature is enabled."
+            ],
+            "type": "u16"
+          }
+        ]
+      }
+    },
+    {
+      "name": "UpdateGatewayReferralSettingsArgs",
+      "docs": [
+        "Arguments for updating gateway referral settings"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "feature_flags",
+            "docs": [
+              "Optional feature flags to update (bit 0 = referral program enabled, bit 1 = net mode)",
+              "Bit 2 (custom protocol fee) is reserved for protocol admin and cannot be modified here"
+            ],
+            "type": {
+              "option": "u8"
+            }
+          },
+          {
+            "name": "referral_allocation_bps",
+            "docs": [
+              "Optional referral allocation in basis points (0-2500)"
+            ],
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "referral_tiers_bps",
+            "docs": [
+              "Optional referral tier distribution [level1, level2, level3] in bps (must sum to 10000)"
+            ],
+            "type": {
+              "option": {
+                "array": [
+                  "u16",
+                  3
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UserPayment",
+      "docs": [
+        "Each owner/authority+mint has a unique UserPayment account.",
+        "The purpose of this account is to be able to identify quickly",
+        "some statistics that are valid across *all* payment policies",
+        "for an authority across a mint."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "docs": [
+              "Owner of this payment account (the user)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "token_account",
+            "docs": [
+              "Associated token account for payment token"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "docs": [
+              "Mint address of token used for payments"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "active_policies_count",
+            "docs": [
+              "Number of active payment policies for this user/mint combination"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "created_at",
+            "docs": [
+              "Unix timestamp when account was created"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "updated_at",
+            "docs": [
+              "Unix timestamp when account was last updated"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "is_active",
+            "docs": [
+              "Whether this payment account is active"
+            ],
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "PDA bump seed for address derivation"
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "created_policies_count",
+            "docs": [
+              "Total number of policies ever created for this user/mint combination",
+              "This field only increases and is used to prevent policy ID reuse"
+            ],
+            "type": "u32"
+          },
+          {
+            "name": "padding",
+            "docs": [
+              "Reserved space for future extensions"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                252
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "UserPaymentCreated",
+      "docs": [
+        "An event that is thrown when a user payment account is created"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    }
+  ],
+  "constants": [
+    {
+      "name": "SEED",
+      "type": "string",
+      "value": "\"anchor\""
+    }
+  ]
+}

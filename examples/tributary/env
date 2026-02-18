@@ -1,0 +1,17 @@
+# Solana RPC Configuration
+SOLANA_RPC_URL=${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}
+SOLANA_WS_URL=${SOLANA_WS_URL:-wss://api.mainnet-beta.solana.com}
+
+# Program to index (comma-separated)
+PROGRAM_PREFIXES=TRibg8W8zmPHQqWtyAD1rEBRXEdyU13Mu6qX1Sg42tJ:tributary
+
+# Database Configuration
+DB_URL=${DB_URL:-sqlite:./data/soltrace.db}
+IDL_DIR=/idls
+
+# Indexer Configuration
+COMMITMENT=${COMMITMENT:-confirmed}
+RECONNECT_DELAY=${RECONNECT_DELAY:-5}
+
+# Logging
+LOG_LEVEL=${LOG_LEVEL:-info}
