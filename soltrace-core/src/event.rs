@@ -2,17 +2,21 @@ use crate::{
     error::{Result, SoltraceError},
     idl::IdlParser,
     idl_event::IdlEventDecoder,
-    types::{DecodedEvent, IdlEventDefinition},
+    types::{DecodedEvent, IdlEventDefinition, ProgramPrefixConfig},
 };
 
 #[derive(Clone)]
 pub struct EventDecoder {
     idl_parser: IdlParser,
+    prefix_config: ProgramPrefixConfig,
 }
 
 impl EventDecoder {
-    pub fn new(idl_parser: IdlParser) -> Self {
-        Self { idl_parser }
+    pub fn new(idl_parser: IdlParser, prefix_config: ProgramPrefixConfig) -> Self {
+        Self {
+            idl_parser,
+            prefix_config,
+        }
     }
 
     /// Decode an Anchor event from raw data bytes
@@ -44,8 +48,12 @@ impl EventDecoder {
         // Decode the event data using IDL-based decoder
         let decoded = self.decode_event_data(&event_def, event_data)?;
 
+        // Prefix event name with program prefix
+        let prefix = self.prefix_config.get_prefix(program_id);
+        let prefixed_event_name = format!("{}_{}", prefix, event_def.name);
+
         Ok(DecodedEvent {
-            event_name: event_def.name.clone(),
+            event_name: prefixed_event_name,
             data: decoded,
             discriminator,
         })
@@ -82,7 +90,8 @@ mod tests {
     #[test]
     fn test_decode_empty_data() {
         let idl_parser = IdlParser::new();
-        let decoder = EventDecoder::new(idl_parser);
+        let prefix_config = ProgramPrefixConfig::new();
+        let decoder = EventDecoder::new(idl_parser, prefix_config);
 
         let result = decoder.decode_event("test_program", &[]);
         assert!(result.is_err());

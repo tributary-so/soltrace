@@ -5,7 +5,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt;
 use mongodb::{bson, bson::doc, options::IndexOptions, Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +15,6 @@ struct EventDocument {
     id: Option<bson::oid::ObjectId>,
     slot: i64,
     signature: String,
-    program_id: String,
     event_name: String,
     discriminator: String,
     /// Nested data structure - not JSON string but actual document
@@ -30,7 +28,6 @@ impl From<EventDocument> for EventRecord {
             id: doc.id.map(|oid| oid.to_string()).unwrap_or_default(),
             slot: doc.slot,
             signature: doc.signature,
-            program_id: doc.program_id,
             event_name: doc.event_name,
             discriminator: doc.discriminator,
             data: bson::Bson::Document(doc.data).into(),
@@ -59,9 +56,9 @@ impl MongoDbBackend {
             .filter(|s| !s.is_empty())
             .unwrap_or("soltrace");
 
-        let client = Client::with_uri_str(database_url).await.map_err(|e| {
-            SoltraceError::Database(format!("Failed to connect to MongoDB: {}", e))
-        })?;
+        let client = Client::with_uri_str(database_url)
+            .await
+            .map_err(|e| SoltraceError::Database(format!("Failed to connect to MongoDB: {}", e)))?;
 
         let db = client.database(db_name);
         let collection = db.collection::<EventDocument>("events");
@@ -82,9 +79,6 @@ impl MongoDbBackend {
         // Slot index
         let slot_index = IndexModel::builder().keys(doc! { "slot": 1 }).build();
 
-        // Program ID index
-        let program_id_index = IndexModel::builder().keys(doc! { "program_id": 1 }).build();
-
         // Event name index
         let event_name_index = IndexModel::builder().keys(doc! { "event_name": 1 }).build();
 
@@ -95,7 +89,6 @@ impl MongoDbBackend {
             .create_indexes(vec![
                 signature_index,
                 slot_index,
-                program_id_index,
                 event_name_index,
                 timestamp_index,
             ])
@@ -126,7 +119,6 @@ impl DatabaseBackend for MongoDbBackend {
             id: None,
             slot: raw.slot as i64,
             signature: raw.signature.clone(),
-            program_id: raw.program_id.to_string(),
             event_name: event.event_name.clone(),
             discriminator: discriminator_hex,
             data: data_doc,
@@ -162,32 +154,11 @@ impl DatabaseBackend for MongoDbBackend {
             .map_err(|e| SoltraceError::Database(format!("Failed to query events: {}", e)))?;
 
         let mut events = Vec::new();
-        while cursor.advance().await.map_err(|e| {
-            SoltraceError::Database(format!("Failed to advance cursor: {}", e))
-        })? {
-            let doc = cursor.deserialize_current().map_err(|e| {
-                SoltraceError::Database(format!("Failed to deserialize event: {}", e))
-            })?;
-            events.push(doc.into());
-        }
-
-        Ok(events)
-    }
-
-    async fn get_events_by_program(&self, program_id: &str) -> Result<Vec<EventRecord>> {
-        let filter = doc! { "program_id": program_id };
-
-        let mut cursor = self
-            .collection
-            .find(filter)
-            .sort(doc! { "slot": -1 })
+        while cursor
+            .advance()
             .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to query events: {}", e)))?;
-
-        let mut events = Vec::new();
-        while cursor.advance().await.map_err(|e| {
-            SoltraceError::Database(format!("Failed to advance cursor: {}", e))
-        })? {
+            .map_err(|e| SoltraceError::Database(format!("Failed to advance cursor: {}", e)))?
+        {
             let doc = cursor.deserialize_current().map_err(|e| {
                 SoltraceError::Database(format!("Failed to deserialize event: {}", e))
             })?;
@@ -208,9 +179,11 @@ impl DatabaseBackend for MongoDbBackend {
             .map_err(|e| SoltraceError::Database(format!("Failed to query events: {}", e)))?;
 
         let mut events = Vec::new();
-        while cursor.advance().await.map_err(|e| {
-            SoltraceError::Database(format!("Failed to advance cursor: {}", e))
-        })? {
+        while cursor
+            .advance()
+            .await
+            .map_err(|e| SoltraceError::Database(format!("Failed to advance cursor: {}", e)))?
+        {
             let doc = cursor.deserialize_current().map_err(|e| {
                 SoltraceError::Database(format!("Failed to deserialize event: {}", e))
             })?;
@@ -218,25 +191,6 @@ impl DatabaseBackend for MongoDbBackend {
         }
 
         Ok(events)
-    }
-
-    async fn get_latest_slot(&self, program_id: &str) -> Result<Option<Slot>> {
-        let filter = doc! { "program_id": program_id };
-
-        let mut cursor = self
-            .collection
-            .find(filter)
-            .sort(doc! { "slot": -1 })
-            .limit(1)
-            .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to query events: {}", e)))?;
-
-        // Use try_next to get the first document
-        let doc: Option<EventDocument> = cursor.try_next().await.map_err(|e| {
-            SoltraceError::Database(format!("Failed to deserialize event: {}", e))
-        })?;
-
-        Ok(doc.map(|d| d.slot as Slot))
     }
 
     async fn event_exists(&self, signature: &str) -> Result<bool> {

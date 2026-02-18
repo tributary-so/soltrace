@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
+use std::collections::HashMap;
 
 pub type Slot = u64;
 pub type ProgramId = Pubkey;
@@ -76,4 +77,38 @@ pub struct RawEvent {
     pub program_id: ProgramId,
     pub log: String,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Configuration for program-to-prefix mapping
+#[derive(Debug, Clone)]
+pub struct ProgramPrefixConfig {
+    pub default_prefix: String,
+    pub program_mappings: HashMap<String, String>,
+}
+
+impl ProgramPrefixConfig {
+    pub fn new() -> Self {
+        Self {
+            default_prefix: "default".to_string(),
+            program_mappings: HashMap::new(),
+        }
+    }
+
+    pub fn add_mapping(&mut self, program_id: &str, prefix: &str) {
+        self.program_mappings
+            .insert(program_id.to_string(), prefix.to_string());
+    }
+
+    pub fn get_prefix(&self, program_id: &str) -> String {
+        self.program_mappings
+            .get(program_id)
+            .cloned()
+            .unwrap_or_else(|| self.default_prefix.clone())
+    }
+}
+
+impl Default for ProgramPrefixConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -7,6 +7,7 @@ use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
     load_idls, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, IdlParser,
+    ProgramPrefixConfig,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -179,8 +180,15 @@ async fn run_indexer(
         info!("  - {}: {} events", addr, idl.events.len());
     }
 
+    // Create program prefix configuration
+    let mut prefix_config = ProgramPrefixConfig::new();
+    // Add default prefix for all programs
+    for program_id in &program_ids {
+        prefix_config.add_mapping(&program_id.to_string(), "tributary");
+    }
+
     // Create event decoder
-    let event_decoder = Arc::new(EventDecoder::new(idl_parser));
+    let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
 
     // Track processed signatures to avoid duplicates
     let processed_signatures = Arc::new(tokio::sync::Mutex::new(HashSet::<String>::new()));

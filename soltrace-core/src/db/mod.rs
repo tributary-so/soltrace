@@ -12,7 +12,6 @@ pub struct EventRecord {
     pub id: String,
     pub slot: i64,
     pub signature: String,
-    pub program_id: String,
     pub event_name: String,
     pub discriminator: String,
     pub data: serde_json::Value,
@@ -35,14 +34,8 @@ pub trait DatabaseBackend: Send + Sync {
         end_slot: Slot,
     ) -> Result<Vec<EventRecord>>;
 
-    /// Get events by program
-    async fn get_events_by_program(&self, program_id: &str) -> Result<Vec<EventRecord>>;
-
     /// Get events by event name
     async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>>;
-
-    /// Get the latest indexed slot for a program
-    async fn get_latest_slot(&self, program_id: &str) -> Result<Option<Slot>>;
 
     /// Check if an event already exists (by signature)
     async fn event_exists(&self, signature: &str) -> Result<bool>;
@@ -74,19 +67,13 @@ impl Database {
         start_slot: Slot,
         end_slot: Slot,
     ) -> Result<Vec<EventRecord>> {
-        self.backend.get_events_by_slot_range(start_slot, end_slot).await
-    }
-
-    pub async fn get_events_by_program(&self, program_id: &str) -> Result<Vec<EventRecord>> {
-        self.backend.get_events_by_program(program_id).await
+        self.backend
+            .get_events_by_slot_range(start_slot, end_slot)
+            .await
     }
 
     pub async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>> {
         self.backend.get_events_by_name(event_name).await
-    }
-
-    pub async fn get_latest_slot(&self, program_id: &str) -> Result<Option<Slot>> {
-        self.backend.get_latest_slot(program_id).await
     }
 
     pub async fn event_exists(&self, signature: &str) -> Result<bool> {

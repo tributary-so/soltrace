@@ -17,7 +17,7 @@ pub use idl_event::IdlEventDecoder;
 pub use metrics::{HealthCheck, HealthStatus, Metrics, MetricsSnapshot};
 pub use retry::{concurrent_process, process_batches, retry_with_backoff, retry_with_rate_limit};
 pub use types::DecodedEvent;
-pub use types::{EventDiscriminator, ProgramId, Slot};
+pub use types::{EventDiscriminator, ProgramId, ProgramPrefixConfig, Slot};
 pub use utils::{extract_event_from_log, load_idls, process_transaction};
 pub use validation::{
     validate_program_id, validate_program_ids, validate_rpc_url, validate_ws_url,

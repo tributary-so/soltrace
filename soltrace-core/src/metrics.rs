@@ -63,7 +63,7 @@ impl Metrics {
     /// Record a processed event
     pub fn record_event(&self, program_id: &str, event_type: &str) {
         self.events_total.fetch_add(1, Ordering::Relaxed);
-        
+
         // Update program counter
         let program_id = program_id.to_string();
         let events_by_program = self.events_by_program.clone();
@@ -71,7 +71,7 @@ impl Metrics {
             let mut map = events_by_program.write().await;
             *map.entry(program_id).or_insert(0) += 1;
         });
-        
+
         // Update event type counter
         let event_type = event_type.to_string();
         let events_by_type = self.events_by_type.clone();
@@ -139,7 +139,7 @@ impl Metrics {
     pub async fn snapshot(&self) -> MetricsSnapshot {
         let events_by_program = self.events_by_program.read().await.clone();
         let events_by_type = self.events_by_type.read().await.clone();
-        
+
         MetricsSnapshot {
             events_total: self.events_total.load(Ordering::Relaxed),
             events_by_program,
@@ -267,12 +267,12 @@ impl HealthCheck {
         let reconnections = self.metrics.ws_reconnections.load(Ordering::Relaxed);
         let rpc_calls = self.metrics.rpc_calls.load(Ordering::Relaxed);
         let rpc_failures = self.metrics.rpc_failures.load(Ordering::Relaxed);
-        
+
         // If too many reconnections, mark as unhealthy
         if reconnections > self.max_reconnections * 2 {
             return HealthStatus::Unhealthy;
         }
-        
+
         // Check RPC failure rate
         if rpc_calls > 0 {
             let failure_rate = rpc_failures as f64 / rpc_calls as f64;
@@ -280,12 +280,12 @@ impl HealthCheck {
                 return HealthStatus::Degraded;
             }
         }
-        
+
         // Check for high reconnection count
         if reconnections > self.max_reconnections {
             return HealthStatus::Degraded;
         }
-        
+
         HealthStatus::Healthy
     }
 
@@ -293,7 +293,7 @@ impl HealthCheck {
     pub async fn health_check(&self) -> HealthCheckResult {
         let status = self.check();
         let snapshot = self.metrics.snapshot().await;
-        
+
         HealthCheckResult {
             status,
             metrics: snapshot,

@@ -2,21 +2,17 @@ use anyhow::Result;
 use clap::Parser;
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcTransactionConfig;
-use solana_sdk::pubkey::Pubkey;
 use solana_commitment_config::CommitmentConfig;
+use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    Database,
-    EventDecoder,
-    IdlParser,
-    load_idls,
-    process_transaction,
-    retry_with_rate_limit,
+    load_idls, process_transaction, retry_with_rate_limit, Database, EventDecoder, IdlParser,
+    ProgramPrefixConfig,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, error, debug, warn};
 use tokio::task;
+use tracing::{debug, error, info, warn};
 
 /// Soltrace Backfill - Historical Solana event indexer
 #[derive(Parser)]
@@ -24,7 +20,12 @@ use tokio::task;
 #[command(about = "Backfill historical Solana events from RPC", long_about = None)]
 struct Cli {
     /// Solana RPC URL
-    #[arg(short, long, default_value = "https://api.mainnet-beta.solana.com", env("SOLANA_RPC_URL"))]
+    #[arg(
+        short,
+        long,
+        default_value = "https://api.mainnet-beta.solana.com",
+        env("SOLANA_RPC_URL")
+    )]
     rpc_url: String,
 
     /// Comma-separated list of program IDs to index
@@ -119,8 +120,16 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         info!("  - {}: {} events", addr, idl.events.len());
     }
 
+    // Create program prefix configuration
+    let mut prefix_config = ProgramPrefixConfig::new();
+    // You can add custom prefixes for specific programs here
+    // prefix_config.add_mapping("TRibg8W8zmPHQqWtyAD1rEBRXEdyU13Mu6qX1Sg42tJ", "tributary");
+    for program_id in &program_ids {
+        prefix_config.add_mapping(program_id, "tributary");
+    }
+
     // Create event decoder
-    let event_decoder = Arc::new(EventDecoder::new(idl_parser));
+    let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
 
     // Initialize RPC client
     let rpc_client = Arc::new(RpcClient::new(cli.rpc_url));
@@ -136,18 +145,23 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         info!("\nProcessing program: {}", program_id_str);
 
         // Validate and parse program ID
-        let program_id = program_id_str.parse::<Pubkey>()
+        let program_id = program_id_str
+            .parse::<Pubkey>()
             .map_err(|e| anyhow::anyhow!("Invalid program ID {}: {}", program_id_str, e))?;
 
         // Check if program exists with retry
         let account = retry_with_rate_limit(
             || async { rpc_client.get_account(&program_id) },
             cli.max_retries,
-        ).await
+        )
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to fetch account {}: {}", program_id_str, e))?;
 
         if account.owner == solana_sdk_ids::system_program::ID {
-            warn!("Program {} is not a program (owner is System Program)", program_id_str);
+            warn!(
+                "Program {} is not a program (owner is System Program)",
+                program_id_str
+            );
             continue;
         }
 
@@ -166,7 +180,8 @@ async fn run_backfill(cli: Cli) -> Result<()> {
                 rpc_client.get_signatures_for_address_with_config(&program_id, config)
             },
             cli.max_retries,
-        ).await
+        )
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to get signatures for {}: {}", program_id_str, e))?;
 
         let signatures_count = signatures.len();
@@ -190,10 +205,14 @@ async fn run_backfill(cli: Cli) -> Result<()> {
             &mut processed_signatures,
             cli.concurrency,
             cli.max_retries,
-        ).await?;
+        )
+        .await?;
 
         total_events_processed += program_events;
-        info!("Program {} complete: {} events processed", program_id_str, program_events);
+        info!(
+            "Program {} complete: {} events processed",
+            program_id_str, program_events
+        );
 
         // Delay between programs to avoid rate limiting
         tokio::time::sleep(Duration::from_millis(cli.batch_delay)).await;
@@ -202,7 +221,10 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     info!("\nBackfill complete!");
     info!("Total signatures fetched: {}", total_signatures_fetched);
     info!("Total events processed: {}", total_events_processed);
-    info!("Unique signatures processed: {}", processed_signatures.len());
+    info!(
+        "Unique signatures processed: {}",
+        processed_signatures.len()
+    );
 
     Ok(())
 }
@@ -240,7 +262,8 @@ async fn process_signatures_concurrent(
                     &event_decoder,
                     &db,
                     max_retries,
-                ).await
+                )
+                .await
             });
 
             handles.push((signature.clone(), handle));
@@ -249,7 +272,7 @@ async fn process_signatures_concurrent(
         // Wait for all tasks in this chunk
         for (signature, handle) in handles {
             processed_count += 1;
-            
+
             match handle.await {
                 Ok(Ok(event_count)) => {
                     events_count += event_count;
@@ -266,8 +289,10 @@ async fn process_signatures_concurrent(
 
         // Progress update every 100 signatures
         if processed_count % 100 == 0 || processed_count >= total {
-            info!("Progress: {}/{} signatures processed, {} events found", 
-                  processed_count, total, events_count);
+            info!(
+                "Progress: {}/{} signatures processed, {} events found",
+                processed_count, total, events_count
+            );
         }
     }
 
@@ -283,7 +308,8 @@ async fn process_single_signature(
     max_retries: u32,
 ) -> Result<usize> {
     // Parse signature
-    let sig = signature.parse::<solana_sdk::signature::Signature>()
+    let sig = signature
+        .parse::<solana_sdk::signature::Signature>()
         .map_err(|e| anyhow::anyhow!("Invalid signature: {}", e))?;
 
     // Fetch transaction with retry
@@ -299,7 +325,8 @@ async fn process_single_signature(
             )
         },
         max_retries,
-    ).await
+    )
+    .await
     .map_err(|e| anyhow::anyhow!("Failed to fetch transaction: {}", e))?;
 
     // Process transaction
@@ -314,10 +341,7 @@ mod tests {
     #[test]
     fn test_program_parsing() {
         let programs = "Prog1,Prog2,Prog3";
-        let parsed: Vec<String> = programs
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .collect();
+        let parsed: Vec<String> = programs.split(',').map(|s| s.trim().to_string()).collect();
 
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0], "Prog1");
