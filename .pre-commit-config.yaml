@@ -1,0 +1,37 @@
+---
+repos:
+  ######################################
+  # Hooks for all projects
+  ######################################
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude_types:
+          - javascript
+          - ts
+      - id: check-executables-have-shebangs
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.9.1
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  - repo: https://github.com/ljnsn/cz-conventional-gitmoji
+    rev: v0.7.0
+    hooks:
+      - id: conventional-gitmoji
+
+  ######################################
+  # Contract project
+  ######################################
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        files: ^soltrace/.*/.*.rs
+        args: [--manifest-path=./Cargo.toml, --check, --]
+      - id: cargo-check
+        files: ^programs/
+        args: [--manifest-path=./Cargo.toml, --]
