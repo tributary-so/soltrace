@@ -11,20 +11,15 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy Cargo files (for caching)
-COPY Cargo.toml Cargo.lock ./
-COPY soltrace-core/Cargo.toml ./soltrace-core/
-COPY soltrace-live/Cargo.toml ./soltrace-live/
-COPY soltrace-backfill/Cargo.toml ./soltrace-backfill/
-
 # Copy source code
 COPY . .
 
 # Build dependencies (cached layer)
 RUN cargo build --release
+RUN ls target/ && pwd target/ && ls target/release/*
 
 # Stage 2: Runtime - Contains only the binaries
-FROM docker.io/library/debian:bookworm-slim
+FROM docker.io/library/rust:1.88-bookworm 
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -42,15 +37,15 @@ WORKDIR /app
 
 # Copy binaries from builder
 COPY --from=builder --chown=soltrace:soltrace \
-    target/release/soltrace-live \
-    target/release/soltrace-backfill \
+    /app/target/release/soltrace-live \
+    /app/target/release/soltrace-backfill \
     /app/
 
 # Switch to non-root user
 USER soltrace
 
 # Create data directory for SQLite
-VOLUME ["/data"]
+VOLUME ["/data", "/idls"]
 
 # Environment variables (with defaults)
 ENV DB_URL=sqlite:./data/soltrace.db
@@ -72,16 +67,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 ENTRYPOINT ["/app/soltrace-live"]
 
 # Default command (can be overridden)
-CMD ["run", \
-    "--programs", "${PROGRAM_IDS}", \
-    "--db-url", "${DB_URL}", \
-    "--idl-dir", "${IDL_DIR}", \
-    "--rpc-url", "${SOLANA_RPC_URL}", \
-    "--ws-url", "${SOLANA_WS_URL}", \
-    "--commitment", "${COMMITMENT}", \
-    "--reconnect-delay", "${RECONNECT_DELAY}"]
+CMD ["run"]
 
 # Metadata
-LABEL maintainer="Fabian Schuh <fabian@example.com>"
-LABEL description="Soltrace - Solana Event Indexer"
+LABEL maintainer="Fabian Schuh <fabian@chainsquad.com>"
+LABEL description="Soltrace - IDL based Event Indexer for Solana"
 LABEL version="0.1.0"
