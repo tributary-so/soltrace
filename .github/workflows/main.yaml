@@ -26,4 +26,4 @@ jobs:
     with:
       registry: ghcr.io
       package: soltrace
-      version: "${{ github.event.workflow_run.head_branch }}.${{ github.event.workflow_run.run_number }}"
+      version: "${{ github.ref_name }}.${{ github.run_number }}"
