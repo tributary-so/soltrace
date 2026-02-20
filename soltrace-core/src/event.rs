@@ -24,7 +24,12 @@ impl EventDecoder {
     /// Anchor event format:
     /// - 8 bytes: discriminator (sha256("event:<name>")[..8])
     /// - Remaining bytes: borsh-encoded event data
-    pub fn decode_event(&self, program_id: &str, data: &[u8]) -> Result<DecodedEvent> {
+    pub fn decode_event(
+        &self,
+        program_id: &str,
+        signature: &str,
+        data: &[u8],
+    ) -> Result<DecodedEvent> {
         if data.len() < 8 {
             return Err(SoltraceError::EventDecode(
                 "Event data too short (< 8 bytes)".to_string(),
@@ -46,7 +51,7 @@ impl EventDecoder {
             })?;
 
         // Decode the event data using IDL-based decoder
-        let decoded = self.decode_event_data(&event_def, event_data)?;
+        let decoded = self.decode_event_data(program_id, signature, &event_def, event_data)?;
 
         // Prefix event name with program prefix
         let prefix = self.prefix_config.get_prefix(program_id);
@@ -62,21 +67,46 @@ impl EventDecoder {
     /// Decode event data using IDL-based borsh deserialization
     fn decode_event_data(
         &self,
+        program_id: &str,
+        signature: &str,
         event_def: &IdlEventDefinition,
         data: &[u8],
     ) -> Result<serde_json::Value> {
         let empty_fields: Vec<crate::types::IdlField> = vec![];
         let fields = event_def.fields.as_ref().unwrap_or(&empty_fields);
 
-        // Use the new IDL-based decoder
-        match IdlEventDecoder::decode(data, fields) {
+        let empty_types: Vec<serde_json::Value> = vec![];
+        let types = self
+            .idl_parser
+            .get_idls()
+            .get(program_id)
+            .and_then(|idl| idl.types.as_ref())
+            .unwrap_or(&empty_types);
+
+        // Use new IDL-based decoder
+        match IdlEventDecoder::decode(data, fields, types) {
             Ok(decoded) => Ok(decoded),
-            Err(_) => {
+            Err(e) => {
+                // Log detailed warning for decode failure
+                tracing::warn!(
+                    "ID Decode Failed for event '{}' (program_id: {}, signature: {}): {}. Fallback to hex encoding. Data length: {} bytes, fields defined: {}",
+                    event_def.name,
+                    program_id,
+                    signature,
+                    e,
+                    data.len(),
+                    fields.len()
+                );
+
                 // Fallback to hex encoding if decoding fails
                 let hex = hex::encode_upper(data);
                 Ok(serde_json::json!({
                     "hex": hex,
                     "length": data.len(),
+                    "decode_error": e.to_string(),
+                    "event_name": event_def.name,
+                    "field_count": fields.len(),
+                    "timestamp": chrono::Utc::now().to_rfc3339()
                 }))
             }
         }
@@ -93,7 +123,7 @@ mod tests {
         let prefix_config = ProgramPrefixConfig::new();
         let decoder = EventDecoder::new(idl_parser, prefix_config);
 
-        let result = decoder.decode_event("test_program", &[]);
+        let result = decoder.decode_event("test_program", "test_signature", &[]);
         assert!(result.is_err());
     }
 }

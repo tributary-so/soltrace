@@ -9,12 +9,12 @@ pub struct IdlEventDecoder;
 
 impl IdlEventDecoder {
     /// Decode event data using IDL field definitions and anchor_lang's borsh utilities
-    pub fn decode(data: &[u8], fields: &[IdlField]) -> Result<Value> {
+    pub fn decode(data: &[u8], fields: &[IdlField], types: &[serde_json::Value]) -> Result<Value> {
         let mut result = serde_json::Map::new();
         let mut offset = 0;
 
         for field in fields {
-            let (value, bytes_read) = Self::decode_field(data, offset, &field.field_type)?;
+            let (value, bytes_read) = Self::decode_field(data, offset, &field.field_type, types)?;
             result.insert(field.name.clone(), value);
             offset += bytes_read;
         }
@@ -35,17 +35,18 @@ impl IdlEventDecoder {
         data: &[u8],
         offset: usize,
         field_type: &serde_json::Value,
+        types: &[serde_json::Value],
     ) -> Result<(Value, usize)> {
         let data = &data[offset..];
 
         // Handle complex types (objects like {"array": ["u8", 64]})
         if let Some(obj) = field_type.as_object() {
-            return Self::decode_complex_type(data, obj);
+            return Self::decode_complex_type(data, obj, types);
         }
 
         // Simple string type
         if let Some(type_str) = field_type.as_str() {
-            return Self::decode_simple_type(data, type_str);
+            return Self::decode_simple_type(data, type_str, types);
         }
 
         Err(SoltraceError::EventDecode(format!(
@@ -54,7 +55,11 @@ impl IdlEventDecoder {
         )))
     }
 
-    fn decode_simple_type(data: &[u8], field_type: &str) -> Result<(Value, usize)> {
+    fn decode_simple_type(
+        data: &[u8],
+        field_type: &str,
+        types: &[serde_json::Value],
+    ) -> Result<(Value, usize)> {
         match field_type {
             // Boolean
             "bool" => {
@@ -127,7 +132,7 @@ impl IdlEventDecoder {
                 if is_some {
                     let inner_type = &t[7..t.len() - 1];
                     let (value, bytes_read) =
-                        Self::decode_field(&data[1..], 0, &serde_json::json!(inner_type))?;
+                        Self::decode_field(&data[1..], 0, &serde_json::json!(inner_type), types)?;
                     Ok((value, 1 + bytes_read))
                 } else {
                     Ok((Value::Null, 1))
@@ -137,7 +142,7 @@ impl IdlEventDecoder {
             // Vec<T>
             t if t.starts_with("vec<") && t.ends_with(">") => {
                 let inner_type = &t[4..t.len() - 1];
-                let (arr, bytes_read) = Self::decode_vec(data, inner_type)?;
+                let (arr, bytes_read) = Self::decode_vec(data, inner_type, types)?;
                 Ok((Value::Array(arr), bytes_read))
             }
 
@@ -162,6 +167,7 @@ impl IdlEventDecoder {
                         &data[total_bytes..],
                         0,
                         &serde_json::json!(inner_type),
+                        types,
                     )?;
                     arr.push(value);
                     total_bytes += bytes_read;
@@ -180,6 +186,7 @@ impl IdlEventDecoder {
     fn decode_complex_type(
         data: &[u8],
         obj: &serde_json::Map<String, serde_json::Value>,
+        types: &[serde_json::Value],
     ) -> Result<(Value, usize)> {
         // Handle array type: {"array": ["u8", 64]}
         if let Some(array) = obj.get("array") {
@@ -187,10 +194,22 @@ impl IdlEventDecoder {
                 if arr.len() == 2 {
                     if let Some(inner_type) = arr[0].as_str() {
                         if let Some(size) = arr[1].as_u64() {
-                            return Self::decode_fixed_array(data, inner_type, size as usize);
+                            return Self::decode_fixed_array(
+                                data,
+                                inner_type,
+                                size as usize,
+                                types,
+                            );
                         }
                     }
                 }
+            }
+        }
+
+        // Handle option type: {"option": "u32"}
+        if let Some(option) = obj.get("option") {
+            if let Some(inner_type) = option.as_str() {
+                return Self::decode_option(data, inner_type, types);
             }
         }
 
@@ -198,10 +217,7 @@ impl IdlEventDecoder {
         if let Some(defined) = obj.get("defined") {
             if let Some(name) = defined.get("name") {
                 if let Some(type_name) = name.as_str() {
-                    return Err(SoltraceError::EventDecode(format!(
-                        "Defined type '{}' not yet supported",
-                        type_name
-                    )));
+                    return Self::decode_defined_type(data, type_name, types);
                 }
             }
         }
@@ -212,17 +228,169 @@ impl IdlEventDecoder {
         )))
     }
 
-    fn decode_fixed_array(data: &[u8], inner_type: &str, size: usize) -> Result<(Value, usize)> {
+    fn decode_fixed_array(
+        data: &[u8],
+        inner_type: &str,
+        size: usize,
+        types: &[serde_json::Value],
+    ) -> Result<(Value, usize)> {
         let mut arr = Vec::with_capacity(size);
         let mut offset = 0;
 
         for _ in 0..size {
-            let (value, bytes_read) = Self::decode_simple_type(&data[offset..], inner_type)?;
+            let (value, bytes_read) = Self::decode_simple_type(&data[offset..], inner_type, types)?;
             arr.push(value);
             offset += bytes_read;
         }
 
         Ok((Value::Array(arr), offset))
+    }
+
+    /// Decode a defined type (enum or struct) from IDL types array
+    fn decode_defined_type(
+        data: &[u8],
+        type_name: &str,
+        types: &[serde_json::Value],
+    ) -> Result<(Value, usize)> {
+        let type_def = types
+            .iter()
+            .find(|t| t.get("name").and_then(|n| n.as_str()) == Some(type_name))
+            .ok_or_else(|| {
+                SoltraceError::EventDecode(format!("Type '{}' not found in IDL", type_name))
+            })?;
+
+        let type_obj = type_def
+            .get("type")
+            .and_then(|t| t.as_object())
+            .ok_or_else(|| {
+                SoltraceError::EventDecode(format!("Type '{}' has no 'type' field", type_name))
+            })?;
+
+        let kind = type_obj
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| {
+                SoltraceError::EventDecode(format!("Type '{}' has no 'kind'", type_name))
+            })?;
+
+        match kind {
+            "enum" => Self::decode_enum(data, type_obj, types),
+            "struct" => Self::decode_struct(data, type_obj, types),
+            _ => Err(SoltraceError::EventDecode(format!(
+                "Unsupported type kind '{}': {}",
+                kind, type_name
+            ))),
+        }
+    }
+
+    /// Decode an enum (tagged union)
+    fn decode_enum(
+        data: &[u8],
+        type_obj: &serde_json::Map<String, serde_json::Value>,
+        types: &[serde_json::Value],
+    ) -> Result<(Value, usize)> {
+        if data.is_empty() {
+            return Err(SoltraceError::EventDecode(
+                "Not enough data for enum discriminant".to_string(),
+            ));
+        }
+
+        let discriminant = data[0] as usize;
+
+        let variants = type_obj
+            .get("variants")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| SoltraceError::EventDecode("Enum has no variants".to_string()))?;
+
+        let variant = variants.get(discriminant).ok_or_else(|| {
+            SoltraceError::EventDecode(format!("Invalid discriminant: {}", discriminant))
+        })?;
+
+        let variant_name = variant
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("Unknown");
+
+        let mut result = serde_json::Map::new();
+        result.insert(
+            "variant".to_string(),
+            Value::String(variant_name.to_string()),
+        );
+
+        let mut offset = 1;
+
+        if let Some(fields) = variant.get("fields").and_then(|f| f.as_array()) {
+            for field in fields {
+                let field_name = field
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("field");
+
+                let field_type = field.get("type").ok_or_else(|| {
+                    SoltraceError::EventDecode(format!("Field '{}' has no type", field_name))
+                })?;
+
+                let (value, bytes_read) =
+                    Self::decode_field(&data[offset..], 0, field_type, types)?;
+                result.insert(field_name.to_string(), value);
+                offset += bytes_read;
+            }
+        }
+
+        Ok((Value::Object(result), offset))
+    }
+
+    /// Decode a struct
+    fn decode_struct(
+        data: &[u8],
+        type_obj: &serde_json::Map<String, serde_json::Value>,
+        types: &[serde_json::Value],
+    ) -> Result<(Value, usize)> {
+        let fields = type_obj
+            .get("fields")
+            .and_then(|f| f.as_array())
+            .ok_or_else(|| SoltraceError::EventDecode("Struct has no fields".to_string()))?;
+
+        let mut result = serde_json::Map::new();
+        let mut offset = 0;
+
+        for field in fields {
+            let field_name = field
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("field");
+
+            let field_type = field.get("type").ok_or_else(|| {
+                SoltraceError::EventDecode(format!("Field '{}' has no type", field_name))
+            })?;
+
+            let (value, bytes_read) = Self::decode_field(&data[offset..], 0, field_type, types)?;
+            result.insert(field_name.to_string(), value);
+            offset += bytes_read;
+        }
+
+        Ok((Value::Object(result), offset))
+    }
+
+    /// Decode an option type for complex types
+    fn decode_option(
+        data: &[u8],
+        inner_type: &str,
+        types: &[serde_json::Value],
+    ) -> Result<(Value, usize)> {
+        if data.is_empty() {
+            return Err(SoltraceError::EventDecode(
+                "Unexpected end of data for option".to_string(),
+            ));
+        }
+        let is_some = data[0] != 0;
+        if is_some {
+            let (value, bytes_read) =
+                Self::decode_field(&data[1..], 0, &serde_json::json!(inner_type), types)?;
+            Ok((value, 1 + bytes_read))
+        } else {
+            Ok((Value::Null, 1))
+        }
     }
 
     /// Read little-endian bytes into an integer type
@@ -295,7 +463,11 @@ impl IdlEventDecoder {
     }
 
     /// Decode a vector of elements
-    fn decode_vec(data: &[u8], inner_type: &str) -> Result<(Vec<Value>, usize)> {
+    fn decode_vec(
+        data: &[u8],
+        inner_type: &str,
+        types: &[serde_json::Value],
+    ) -> Result<(Vec<Value>, usize)> {
         if data.len() < 4 {
             return Err(SoltraceError::EventDecode(
                 "Not enough data for vec length".to_string(),
@@ -307,8 +479,12 @@ impl IdlEventDecoder {
         let mut total_bytes = 4;
 
         for _ in 0..len {
-            let (value, bytes_read) =
-                Self::decode_field(&data[total_bytes..], 0, &serde_json::json!(inner_type))?;
+            let (value, bytes_read) = Self::decode_field(
+                &data[total_bytes..],
+                0,
+                &serde_json::json!(inner_type),
+                types,
+            )?;
             result.push(value);
             total_bytes += bytes_read;
         }
@@ -330,7 +506,7 @@ mod tests {
             field_type: serde_json::json!("u64"),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert_eq!(result["amount"], "42");
     }
 
@@ -343,7 +519,7 @@ mod tests {
             field_type: serde_json::json!("publicKey"),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert_eq!(result["owner"], pubkey.to_string());
     }
 
@@ -358,7 +534,7 @@ mod tests {
             field_type: serde_json::json!("string"),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert_eq!(result["message"], s);
     }
 
@@ -370,7 +546,7 @@ mod tests {
             field_type: serde_json::json!("bool"),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert_eq!(result["active"], true);
     }
 
@@ -394,7 +570,7 @@ mod tests {
             },
         ];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert_eq!(result["amount"], "1000");
         assert_eq!(result["owner"], owner.to_string());
     }
@@ -410,7 +586,7 @@ mod tests {
             field_type: serde_json::json!("vec<u8>"),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert!(result["data"].is_array());
         assert_eq!(result["data"].as_array().unwrap().len(), 3);
     }
@@ -426,7 +602,7 @@ mod tests {
             field_type: serde_json::json!("option<u64>"),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert_eq!(result["value"], "42");
     }
 
@@ -440,7 +616,7 @@ mod tests {
             field_type: serde_json::json!("option<u64>"),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert!(result["value"].is_null());
     }
 
@@ -454,7 +630,7 @@ mod tests {
             field_type: serde_json::json!({"array": ["u8", 4]}),
         }];
 
-        let result = IdlEventDecoder::decode(&data, &fields).unwrap();
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert!(result["memo"].is_array());
         let arr = result["memo"].as_array().unwrap();
         assert_eq!(arr.len(), 4);
@@ -462,5 +638,76 @@ mod tests {
         assert_eq!(arr[1], 2);
         assert_eq!(arr[2], 3);
         assert_eq!(arr[3], 4);
+    }
+
+    #[test]
+    fn test_decode_enum() {
+        // Define a simple enum type
+        let types = vec![serde_json::json!({
+            "name": "SimpleEnum",
+            "type": {
+                "kind": "enum",
+                "variants": [
+                    {
+                        "name": "First",
+                        "fields": [
+                            {"name": "value", "type": "u64"}
+                        ]
+                    },
+                    {
+                        "name": "Second",
+                        "fields": []
+                    }
+                ]
+            }
+        })];
+
+        // Encode SimpleEnum::First(42) - discriminant (0) + value
+        let discriminant = 0u8;
+        let value = 42u64;
+        let mut data = vec![discriminant];
+        data.extend_from_slice(&value.to_le_bytes());
+
+        let fields = vec![IdlField {
+            name: "simple_enum".to_string(),
+            field_type: serde_json::json!({"defined": {"name": "SimpleEnum"}}),
+        }];
+
+        let result = IdlEventDecoder::decode(&data, &fields, &types).unwrap();
+        assert!(result["simple_enum"].is_object());
+        let obj = result["simple_enum"].as_object().unwrap();
+        assert_eq!(obj.get("variant").unwrap(), "First");
+        assert_eq!(obj.get("value").unwrap(), "42");
+    }
+
+    #[test]
+    fn test_decode_option_complex() {
+        // Test complex option format: {"option": "u32"}
+        // Option::Some(42)
+        let mut data = vec![1u8]; // is_some = true
+        data.extend_from_slice(&42u32.to_le_bytes());
+
+        let fields = vec![IdlField {
+            name: "optional_value".to_string(),
+            field_type: serde_json::json!({"option": "u32"}),
+        }];
+
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
+        assert_eq!(result["optional_value"], 42);
+    }
+
+    #[test]
+    fn test_decode_option_complex_none() {
+        // Test complex option format: {"option": "u32"}
+        // Option::None
+        let data = vec![0u8]; // is_some = false
+
+        let fields = vec![IdlField {
+            name: "optional_value".to_string(),
+            field_type: serde_json::json!({"option": "u32"}),
+        }];
+
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
+        assert!(result["optional_value"].is_null());
     }
 }

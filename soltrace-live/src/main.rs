@@ -401,11 +401,11 @@ async fn process_logs_message(
     // Process logs for events
     let mut events_found = 0;
 
-    for log in logs {
-        for program_id in program_ids {
-            if let Some(event_data) = extract_event_from_log(log) {
-                // Decode event
-                match event_decoder.decode_event(&program_id.to_string(), &event_data) {
+        for log in logs {
+            for program_id in program_ids {
+                if let Some(event_data) = extract_event_from_log(log) {
+                    // Decode event
+                    match event_decoder.decode_event(&program_id.to_string(), &signature, &event_data) {
                     Ok(decoded_event) => {
                         // Create raw event record
                         let raw_event = RawEvent {

@@ -91,7 +91,7 @@ pub async fn process_transaction(
     for log in logs {
         if let Some(event_data) = extract_event_from_log(&log) {
             // Decode event
-            match event_decoder.decode_event(program_id_str, &event_data) {
+            match event_decoder.decode_event(program_id_str, &signature, &event_data) {
                 Ok(decoded_event) => {
                     // Create raw event record
                     let raw_event = RawEvent {
