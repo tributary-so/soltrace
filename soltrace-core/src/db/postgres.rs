@@ -1,5 +1,5 @@
 use crate::{
-    db::{DatabaseBackend, EventRecord},
+    db::{event_id_to_hex, generate_event_id, DatabaseBackend, EventRecord},
     error::Result,
     types::{DecodedEvent, RawEvent, Slot},
 };
@@ -25,12 +25,12 @@ impl PostgresBackend {
     }
 
     fn row_to_event_record(&self, row: sqlx::postgres::PgRow) -> Result<EventRecord> {
+        let id_bytes: Vec<u8> = row.get("id");
         Ok(EventRecord {
-            id: row.get::<i64, _>("id").to_string(),
+            id: hex::encode(&id_bytes),
             slot: row.get("slot"),
             signature: row.get("signature"),
             event_name: row.get("event_name"),
-            discriminator: row.get("discriminator"),
             data: row.get::<serde_json::Value, _>("data"),
             timestamp: row.get("timestamp"),
         })
@@ -43,11 +43,10 @@ impl DatabaseBackend for PostgresBackend {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS events (
-                id BIGSERIAL PRIMARY KEY,
+                id BYTEA PRIMARY KEY,
                 slot BIGINT NOT NULL,
-                signature TEXT NOT NULL UNIQUE,
+                signature TEXT NOT NULL,
                 event_name TEXT NOT NULL,
-                discriminator TEXT NOT NULL,
                 data JSONB NOT NULL,
                 timestamp TIMESTAMPTZ NOT NULL
             );
@@ -56,6 +55,7 @@ impl DatabaseBackend for PostgresBackend {
             CREATE INDEX IF NOT EXISTS idx_event_name ON events(event_name);
             CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp);
             CREATE INDEX IF NOT EXISTS idx_data_gin ON events USING GIN (data);
+            CREATE INDEX IF NOT EXISTS idx_signature ON events(signature);
         "#,
         )
         .execute(&self.pool)
@@ -65,27 +65,27 @@ impl DatabaseBackend for PostgresBackend {
         Ok(())
     }
 
-    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent) -> Result<String> {
-        let discriminator_hex = hex::encode_upper(event.discriminator);
+    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
+        let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
+        let event_id = event_id_to_hex(&id_bytes);
 
-        let result = sqlx::query(
+        sqlx::query(
             r#"
-            INSERT INTO events (slot, signature, event_name, discriminator, data, timestamp)
+            INSERT INTO events (id, slot, signature, event_name, data, timestamp)
             VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING id
+            ON CONFLICT (id) DO NOTHING
         "#,
         )
+        .bind(&id_bytes[..])
         .bind(raw.slot as i64)
         .bind(&raw.signature)
         .bind(&event.event_name)
-        .bind(discriminator_hex)
         .bind(&event.data)
         .bind(raw.timestamp)
-        .fetch_one(&self.pool)
+        .execute(&self.pool)
         .await?;
 
-        let id: i64 = result.get("id");
-        Ok(id.to_string())
+        Ok(event_id)
     }
 
     async fn get_events_by_slot_range(

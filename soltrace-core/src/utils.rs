@@ -105,7 +105,7 @@ pub async fn process_transaction(
                     };
 
                     // Store event
-                    match db.insert_event(&decoded_event, &raw_event).await {
+                    match db.insert_event(&decoded_event, &raw_event, events_count).await {
                         Ok(_) => {
                             events_count += 1;
                             debug!(

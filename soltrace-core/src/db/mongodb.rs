@@ -1,5 +1,5 @@
 use crate::{
-    db::{DatabaseBackend, EventRecord},
+    db::{event_id_to_hex, generate_event_id, DatabaseBackend, EventRecord},
     error::{Result, SoltraceError},
     types::{DecodedEvent, RawEvent, Slot},
 };
@@ -11,13 +11,11 @@ use serde::{Deserialize, Serialize};
 /// MongoDB document structure for events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EventDocument {
-    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    id: Option<bson::oid::ObjectId>,
+    #[serde(rename = "_id")]
+    id: String,
     slot: i64,
     signature: String,
     event_name: String,
-    discriminator: String,
-    /// Nested data structure - not JSON string but actual document
     data: bson::Document,
     timestamp: DateTime<Utc>,
 }
@@ -25,11 +23,10 @@ struct EventDocument {
 impl From<EventDocument> for EventRecord {
     fn from(doc: EventDocument) -> Self {
         EventRecord {
-            id: doc.id.map(|oid| oid.to_string()).unwrap_or_default(),
+            id: doc.id,
             slot: doc.slot,
             signature: doc.signature,
             event_name: doc.event_name,
-            discriminator: doc.discriminator,
             data: bson::Bson::Document(doc.data).into(),
             timestamp: doc.timestamp,
         }
@@ -107,31 +104,29 @@ impl DatabaseBackend for MongoDbBackend {
         Ok(())
     }
 
-    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent) -> Result<String> {
-        let discriminator_hex = hex::encode_upper(event.discriminator);
+    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
+        let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
+        let event_id = event_id_to_hex(&id_bytes);
 
-        // Convert JSON data to BSON document
         let data_doc = bson::to_document(&event.data).map_err(|e| {
             SoltraceError::Database(format!("Failed to convert event data to BSON: {}", e))
         })?;
 
         let doc = EventDocument {
-            id: None,
+            id: event_id.clone(),
             slot: raw.slot as i64,
             signature: raw.signature.clone(),
             event_name: event.event_name.clone(),
-            discriminator: discriminator_hex,
             data: data_doc,
             timestamp: raw.timestamp,
         };
 
-        let result = self
-            .collection
+        self.collection
             .insert_one(doc)
             .await
             .map_err(|e| SoltraceError::Database(format!("Failed to insert event: {}", e)))?;
 
-        Ok(result.inserted_id.to_string())
+        Ok(event_id)
     }
 
     async fn get_events_by_slot_range(

@@ -5,6 +5,20 @@ use crate::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+pub fn generate_event_id(signature: &str, index: usize, event_type: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{}_{}_{}", signature, index, event_type));
+    let result = hasher.finalize();
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&result);
+    bytes
+}
+
+pub fn event_id_to_hex(id: &[u8; 32]) -> String {
+    hex::encode(id)
+}
 
 /// Event record stored in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,7 +27,6 @@ pub struct EventRecord {
     pub slot: i64,
     pub signature: String,
     pub event_name: String,
-    pub discriminator: String,
     pub data: serde_json::Value,
     pub timestamp: DateTime<Utc>,
 }
@@ -25,7 +38,7 @@ pub trait DatabaseBackend: Send + Sync {
     async fn run_migrations(&self) -> Result<()>;
 
     /// Store a decoded event
-    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent) -> Result<String>;
+    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String>;
 
     /// Get events by slot range
     async fn get_events_by_slot_range(
@@ -58,8 +71,8 @@ impl Database {
         self.backend.run_migrations().await
     }
 
-    pub async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent) -> Result<String> {
-        self.backend.insert_event(event, raw).await
+    pub async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
+        self.backend.insert_event(event, raw, index).await
     }
 
     pub async fn get_events_by_slot_range(

@@ -1,5 +1,5 @@
 use crate::{
-    db::{DatabaseBackend, EventRecord},
+    db::{event_id_to_hex, generate_event_id, DatabaseBackend, EventRecord},
     error::Result,
     types::{DecodedEvent, RawEvent, Slot},
 };
@@ -52,20 +52,18 @@ impl DatabaseBackend for SqliteBackend {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BLOB PRIMARY KEY,
                 slot INTEGER NOT NULL,
                 signature TEXT NOT NULL,
                 event_name TEXT NOT NULL,
-                discriminator TEXT NOT NULL,
                 data TEXT NOT NULL,
                 timestamp TEXT NOT NULL
             );
 
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_signature_unique ON events(signature);
-
             CREATE INDEX IF NOT EXISTS idx_slot ON events(slot);
             CREATE INDEX IF NOT EXISTS idx_event_name ON events(event_name);
             CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_signature ON events(signature);
         "#,
         )
         .execute(&self.pool)
@@ -75,25 +73,26 @@ impl DatabaseBackend for SqliteBackend {
         Ok(())
     }
 
-    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent) -> Result<String> {
-        let discriminator_hex = hex::encode_upper(event.discriminator);
+    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
+        let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
+        let event_id = event_id_to_hex(&id_bytes);
 
-        let result = sqlx::query(
+        sqlx::query(
             r#"
-            INSERT INTO events (slot, signature, event_name, discriminator, data, timestamp)
+            INSERT OR IGNORE INTO events (id, slot, signature, event_name, data, timestamp)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
         "#,
         )
+        .bind(&id_bytes[..])
         .bind(raw.slot as i64)
         .bind(&raw.signature)
         .bind(&event.event_name)
-        .bind(discriminator_hex)
         .bind(serde_json::to_string(&event.data)?)
         .bind(raw.timestamp.to_rfc3339())
         .execute(&self.pool)
         .await?;
 
-        Ok(result.last_insert_rowid().to_string())
+        Ok(event_id)
     }
 
     async fn get_events_by_slot_range(
@@ -102,7 +101,7 @@ impl DatabaseBackend for SqliteBackend {
         end_slot: Slot,
     ) -> Result<Vec<EventRecord>> {
         let rows = sqlx::query(
-            "SELECT id, slot, signature, event_name, discriminator, data, timestamp FROM events WHERE slot >= ?1 AND slot <= ?2 ORDER BY slot ASC",
+            "SELECT id, slot, signature, event_name, data, timestamp FROM events WHERE slot >= ?1 AND slot <= ?2 ORDER BY slot ASC",
         )
         .bind(start_slot as i64)
         .bind(end_slot as i64)
@@ -111,12 +110,12 @@ impl DatabaseBackend for SqliteBackend {
 
         let mut events = Vec::new();
         for row in rows {
+            let id_bytes: Vec<u8> = row.get("id");
             events.push(EventRecord {
-                id: row.get::<i64, _>("id").to_string(),
+                id: hex::encode(&id_bytes),
                 slot: row.get("slot"),
                 signature: row.get("signature"),
                 event_name: row.get("event_name"),
-                discriminator: row.get("discriminator"),
                 data: serde_json::from_str(row.get::<String, _>("data").as_str())?,
                 timestamp: Self::parse_timestamp(row.get::<String, _>("timestamp").as_str())?,
             });
@@ -127,7 +126,7 @@ impl DatabaseBackend for SqliteBackend {
 
     async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>> {
         let rows = sqlx::query(
-            "SELECT id, slot, signature, event_name, discriminator, data, timestamp FROM events WHERE event_name = ?1 ORDER BY slot DESC",
+            "SELECT id, slot, signature, event_name, data, timestamp FROM events WHERE event_name = ?1 ORDER BY slot DESC",
         )
         .bind(event_name)
         .fetch_all(&self.pool)
@@ -135,12 +134,12 @@ impl DatabaseBackend for SqliteBackend {
 
         let mut events = Vec::new();
         for row in rows {
+            let id_bytes: Vec<u8> = row.get("id");
             events.push(EventRecord {
-                id: row.get::<i64, _>("id").to_string(),
+                id: hex::encode(&id_bytes),
                 slot: row.get("slot"),
                 signature: row.get("signature"),
                 event_name: row.get("event_name"),
-                discriminator: row.get("discriminator"),
                 data: serde_json::from_str(row.get::<String, _>("data").as_str())?,
                 timestamp: Self::parse_timestamp(row.get::<String, _>("timestamp").as_str())?,
             });

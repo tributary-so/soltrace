@@ -417,7 +417,7 @@ async fn process_logs_message(
                         };
 
                         // Store event
-                        match db.insert_event(&decoded_event, &raw_event).await {
+                        match db.insert_event(&decoded_event, &raw_event, events_found).await {
                             Ok(_) => {
                                 info!(
                                     "Stored event: {} from {}",
