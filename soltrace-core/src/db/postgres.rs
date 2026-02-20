@@ -49,17 +49,31 @@ impl DatabaseBackend for PostgresBackend {
                 event_name TEXT NOT NULL,
                 data JSONB NOT NULL,
                 timestamp TIMESTAMPTZ NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_slot ON events(slot);
-            CREATE INDEX IF NOT EXISTS idx_event_name ON events(event_name);
-            CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_data_gin ON events USING GIN (data);
-            CREATE INDEX IF NOT EXISTS idx_signature ON events(signature);
+            )
         "#,
         )
         .execute(&self.pool)
         .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_slot ON events(slot)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_event_name ON events(event_name)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_data_gin ON events USING GIN (data)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_signature ON events(signature)")
+            .execute(&self.pool)
+            .await?;
 
         tracing::info!("PostgreSQL migrations completed");
         Ok(())
@@ -94,7 +108,7 @@ impl DatabaseBackend for PostgresBackend {
         end_slot: Slot,
     ) -> Result<Vec<EventRecord>> {
         let rows = sqlx::query(
-            "SELECT id, slot, signature, event_name, discriminator, data, timestamp FROM events WHERE slot >= $1 AND slot <= $2 ORDER BY slot ASC"
+            "SELECT id, slot, signature, event_name, data, timestamp FROM events WHERE slot >= $1 AND slot <= $2 ORDER BY slot ASC"
         )
         .bind(start_slot as i64)
         .bind(end_slot as i64)
@@ -111,7 +125,7 @@ impl DatabaseBackend for PostgresBackend {
 
     async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>> {
         let rows = sqlx::query(
-            "SELECT id, slot, signature, event_name, discriminator, data, timestamp FROM events WHERE event_name = $1 ORDER BY slot DESC"
+            "SELECT id, slot, signature, event_name, data, timestamp FROM events WHERE event_name = $1 ORDER BY slot DESC"
         )
         .bind(event_name)
         .fetch_all(&self.pool)
