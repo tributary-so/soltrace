@@ -4,6 +4,7 @@ pub mod event;
 pub mod idl;
 pub mod idl_event;
 pub mod metrics;
+pub mod queue;
 pub mod retry;
 pub mod types;
 pub mod utils;
@@ -15,6 +16,9 @@ pub use event::EventDecoder;
 pub use idl::IdlParser;
 pub use idl_event::IdlEventDecoder;
 pub use metrics::{HealthCheck, HealthStatus, Metrics, MetricsSnapshot};
+pub use queue::{EventQueue, QueueEvent};
+#[cfg(feature = "kafka")]
+pub use queue::kafka::{KafkaConfig, KafkaProducer};
 pub use retry::{concurrent_process, process_batches, retry_with_backoff, retry_with_rate_limit};
 pub use types::DecodedEvent;
 pub use types::{EventDiscriminator, ProgramId, ProgramPrefixConfig, Slot};

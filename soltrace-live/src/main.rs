@@ -6,9 +6,11 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    load_idls, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, IdlParser,
-    ProgramPrefixConfig,
+    load_idls, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, EventQueue,
+    IdlParser, ProgramPrefixConfig, QueueEvent,
 };
+#[cfg(feature = "kafka")]
+use soltrace_core::{KafkaConfig, KafkaProducer};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -79,6 +81,10 @@ enum Commands {
         /// WebSocket ping interval in seconds (0 = disable)
         #[arg(long, default_value = "30", env("WS_PING_INTERVAL"))]
         ping_interval: u64,
+
+        /// Kafka broker URLs (comma-separated, enables Kafka if set)
+        #[arg(long, env("KAFKA_BROKERS"))]
+        kafka_brokers: Option<String>,
     },
 }
 
@@ -108,6 +114,7 @@ async fn main() -> Result<()> {
             reconnect_delay,
             max_reconnects,
             ping_interval,
+            kafka_brokers,
         } => {
             run_indexer(
                 ws_url,
@@ -119,6 +126,7 @@ async fn main() -> Result<()> {
                 reconnect_delay,
                 max_reconnects,
                 ping_interval,
+                kafka_brokers,
             )
             .await?;
         }
@@ -146,12 +154,45 @@ async fn run_indexer(
     reconnect_delay: u64,
     max_reconnects: u32,
     ping_interval: u64,
+    kafka_brokers: Option<String>,
 ) -> Result<()> {
     info!("Starting Soltrace Live indexer");
     info!("RPC URL: {}", rpc_url);
     info!("WebSocket URL: {}", ws_url);
     info!("Commitment: {}", commitment);
     info!("Reconnect delay: {}s", reconnect_delay);
+
+    let kafka_producer: Option<Arc<dyn EventQueue>> = match &kafka_brokers {
+        #[allow(unused_variables)]
+        Some(brokers) => {
+            #[cfg(feature = "kafka")]
+            {
+                let config = KafkaConfig::new(brokers.clone());
+                match KafkaProducer::new(config) {
+                    Ok(producer) => {
+                        info!(
+                            "Kafka enabled: {} (dynamic topics from event names)",
+                            brokers
+                        );
+                        Some(Arc::new(producer))
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize Kafka producer: {}", e);
+                        return Err(e);
+                    }
+                }
+            }
+            #[cfg(not(feature = "kafka"))]
+            {
+                error!("Kafka brokers configured but 'kafka' feature not enabled. Recompile with --features kafka");
+                return Err(anyhow::anyhow!("Kafka feature not enabled"));
+            }
+        }
+        None => {
+            info!("Kafka not configured (set KAFKA_BROKERS to enable)");
+            None
+        }
+    };
 
     // Initialize database
     let db = Arc::new(Database::new(&db_url).await?);
@@ -202,6 +243,7 @@ async fn run_indexer(
         &pubkeys,
         event_decoder,
         db,
+        kafka_producer,
         &commitment,
         reconnect_delay,
         max_reconnects,
@@ -217,6 +259,7 @@ async fn run_websocket_loop(
     program_ids: &[Pubkey],
     event_decoder: Arc<EventDecoder>,
     db: Arc<Database>,
+    kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     reconnect_delay: u64,
     max_reconnects: u32,
@@ -245,6 +288,7 @@ async fn run_websocket_loop(
             &program_ids_vec,
             event_decoder.clone(),
             db.clone(),
+            kafka_producer.clone(),
             commitment,
             ping_interval,
         )
@@ -284,6 +328,7 @@ async fn websocket_handler(
     program_ids_str: &[String],
     event_decoder: Arc<EventDecoder>,
     db: Arc<Database>,
+    kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     ping_interval: u64,
 ) -> Result<()> {
@@ -321,13 +366,20 @@ async fn websocket_handler(
     let (tx, mut rx) = mpsc::channel::<solana_client::rpc_response::RpcLogsResponse>(100);
     let db_clone = db.clone();
     let event_decoder_clone = event_decoder.clone();
+    let kafka_producer_clone = kafka_producer.clone();
     let program_ids_clone: Vec<_> = program_ids.to_vec();
 
     // Spawn processing task
     let processor_handle = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            match process_logs_message(message, &program_ids_clone, &event_decoder_clone, &db_clone)
-                .await
+            match process_logs_message(
+                message,
+                &program_ids_clone,
+                &event_decoder_clone,
+                &db_clone,
+                kafka_producer_clone.as_ref(),
+            )
+            .await
             {
                 Ok(count) => {
                     if count > 0 {
@@ -403,6 +455,7 @@ async fn process_logs_message(
     program_ids: &[Pubkey],
     event_decoder: &EventDecoder,
     db: &Database,
+    kafka_producer: Option<&Arc<dyn EventQueue>>,
 ) -> Result<usize> {
     use chrono::Utc;
 
@@ -433,7 +486,7 @@ async fn process_logs_message(
                             timestamp: Utc::now(),
                         };
 
-                        // Store event
+                        // Store event in database
                         match db
                             .insert_event(&decoded_event, &raw_event, events_found)
                             .await
@@ -454,6 +507,19 @@ async fn process_logs_message(
                                 } else {
                                     error!("Failed to store event: {}", e);
                                 }
+                            }
+                        }
+
+                        // Send to Kafka if configured
+                        if let Some(producer) = kafka_producer {
+                            let queue_event = QueueEvent::new(
+                                decoded_event.event_name.clone(),
+                                signature.clone(),
+                                program_id.to_string(),
+                                decoded_event.data.clone(),
+                            );
+                            if let Err(e) = producer.send(&queue_event).await {
+                                error!("Failed to send event to Kafka: {}", e);
                             }
                         }
                     }

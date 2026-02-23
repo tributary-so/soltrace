@@ -24,3 +24,13 @@ mongodb = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
 sha2 = "0.10"
+
+[features]
+default = []
+kafka = ["rdkafka"]
+
+[dependencies.rdkafka]
+version = "0.39"
+optional = true
+default-features = false
+features = ["tokio"]

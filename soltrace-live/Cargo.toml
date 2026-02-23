@@ -3,6 +3,10 @@ name = "soltrace-live"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+kafka = ["soltrace-core/kafka"]
+
 [[bin]]
 name = "soltrace-live"
 path = "src/main.rs"
