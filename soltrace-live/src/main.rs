@@ -9,7 +9,6 @@ use soltrace_core::{
     load_idls, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, IdlParser,
     ProgramPrefixConfig,
 };
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -76,6 +75,10 @@ enum Commands {
         /// Maximum number of reconnection attempts (0 = infinite)
         #[arg(long, default_value = "0", env("MAX_RECONNECT_ATTEMPTS"))]
         max_reconnects: u32,
+
+        /// WebSocket ping interval in seconds (0 = disable)
+        #[arg(long, default_value = "30", env("WS_PING_INTERVAL"))]
+        ping_interval: u64,
     },
 }
 
@@ -104,6 +107,7 @@ async fn main() -> Result<()> {
             commitment,
             reconnect_delay,
             max_reconnects,
+            ping_interval,
         } => {
             run_indexer(
                 ws_url,
@@ -114,6 +118,7 @@ async fn main() -> Result<()> {
                 commitment,
                 reconnect_delay,
                 max_reconnects,
+                ping_interval,
             )
             .await?;
         }
@@ -140,6 +145,7 @@ async fn run_indexer(
     commitment: String,
     reconnect_delay: u64,
     max_reconnects: u32,
+    ping_interval: u64,
 ) -> Result<()> {
     info!("Starting Soltrace Live indexer");
     info!("RPC URL: {}", rpc_url);
@@ -190,9 +196,6 @@ async fn run_indexer(
     // Create event decoder
     let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
 
-    // Track processed signatures to avoid duplicates
-    let processed_signatures = Arc::new(tokio::sync::Mutex::new(HashSet::<String>::new()));
-
     // Start WebSocket subscription with auto-reconnect
     run_websocket_loop(
         &ws_url,
@@ -202,7 +205,7 @@ async fn run_indexer(
         &commitment,
         reconnect_delay,
         max_reconnects,
-        processed_signatures,
+        ping_interval,
     )
     .await?;
 
@@ -217,7 +220,7 @@ async fn run_websocket_loop(
     commitment: &str,
     reconnect_delay: u64,
     max_reconnects: u32,
-    processed_signatures: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    ping_interval: u64,
 ) -> Result<()> {
     let mut reconnect_count: u32 = 0;
     let program_ids_vec: Vec<_> = program_ids.iter().map(|p| p.to_string()).collect();
@@ -243,23 +246,29 @@ async fn run_websocket_loop(
             event_decoder.clone(),
             db.clone(),
             commitment,
-            processed_signatures.clone(),
+            ping_interval,
         )
         .await
         {
             Ok(_) => {
-                info!("WebSocket connection closed normally");
-                break;
+                info!("WebSocket connection closed normally, reconnecting...");
+                reconnect_count += 1;
+                let delay = if reconnect_count > 10 {
+                    Duration::from_secs(60)
+                } else {
+                    Duration::from_secs(reconnect_delay * reconnect_count as u64)
+                };
+                info!("Reconnecting in {:?}...", delay);
+                sleep(delay).await;
             }
             Err(e) => {
                 error!("WebSocket error: {}", e);
                 reconnect_count += 1;
 
                 let delay = if reconnect_count > 10 {
-                    // Cap exponential backoff at ~17 minutes
-                    Duration::from_secs(60 * 15)
+                    Duration::from_secs(60)
                 } else {
-                    Duration::from_secs(reconnect_delay * 2u64.pow(reconnect_count.min(10)))
+                    Duration::from_secs(reconnect_delay * reconnect_count as u64)
                 };
 
                 info!("Reconnecting in {:?}...", delay);
@@ -267,8 +276,6 @@ async fn run_websocket_loop(
             }
         }
     }
-
-    Ok(())
 }
 
 async fn websocket_handler(
@@ -278,7 +285,7 @@ async fn websocket_handler(
     event_decoder: Arc<EventDecoder>,
     db: Arc<Database>,
     commitment: &str,
-    _processed_signatures: Arc<tokio::sync::Mutex<HashSet<String>>>,
+    ping_interval: u64,
 ) -> Result<()> {
     info!("Connecting to WebSocket at: {}", ws_url);
     info!("Monitoring {} program(s):", program_ids.len());
@@ -308,6 +315,7 @@ async fn websocket_handler(
         .map_err(|e| anyhow::anyhow!("Failed to subscribe to logs: {}", e))?;
 
     info!("Successfully subscribed to program logs");
+    info!("WebSocket keep-alive: read timeout = {}s", ping_interval);
 
     // Create channel for processing logs asynchronously
     let (tx, mut rx) = mpsc::channel::<solana_client::rpc_response::RpcLogsResponse>(100);
@@ -334,9 +342,15 @@ async fn websocket_handler(
     });
 
     // Main loop: receive notifications and send to processor
+    let read_timeout = if ping_interval > 0 {
+        Duration::from_secs(ping_interval)
+    } else {
+        Duration::from_secs(60) // default if disabled
+    };
+
     let result: Result<()> = async {
         loop {
-            match timeout(Duration::from_secs(60), notifications.next()).await {
+            match timeout(read_timeout, notifications.next()).await {
                 Ok(Some(response)) => {
                     // Response is Response<RpcLogsResponse>, extract the value
                     if let Err(e) = tx.send(response.value).await {
@@ -350,7 +364,10 @@ async fn websocket_handler(
                 }
                 Err(_) => {
                     // Timeout - connection is still alive but no messages
-                    debug!("No messages received in 60 seconds, connection still alive");
+                    debug!(
+                        "No messages received in {:?}, connection still alive",
+                        read_timeout
+                    );
                 }
             }
         }
@@ -401,11 +418,11 @@ async fn process_logs_message(
     // Process logs for events
     let mut events_found = 0;
 
-        for log in logs {
-            for program_id in program_ids {
-                if let Some(event_data) = extract_event_from_log(log) {
-                    // Decode event
-                    match event_decoder.decode_event(&program_id.to_string(), &signature, &event_data) {
+    for log in logs {
+        for program_id in program_ids {
+            if let Some(event_data) = extract_event_from_log(log) {
+                // Decode event
+                match event_decoder.decode_event(&program_id.to_string(), &signature, &event_data) {
                     Ok(decoded_event) => {
                         // Create raw event record
                         let raw_event = RawEvent {
@@ -417,7 +434,10 @@ async fn process_logs_message(
                         };
 
                         // Store event
-                        match db.insert_event(&decoded_event, &raw_event, events_found).await {
+                        match db
+                            .insert_event(&decoded_event, &raw_event, events_found)
+                            .await
+                        {
                             Ok(_) => {
                                 info!(
                                     "Stored event: {} from {}",
