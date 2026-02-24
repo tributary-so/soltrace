@@ -35,6 +35,42 @@ impl PostgresBackend {
             timestamp: row.get("timestamp"),
         })
     }
+
+    async fn try_enable_timescaledb(&self) -> Result<()> {
+        match sqlx::query("CREATE EXTENSION IF NOT EXISTS timescaledb")
+            .execute(&self.pool)
+            .await
+        {
+            Ok(_) => {
+                tracing::info!("TimescaleDB extension enabled");
+
+                match sqlx::query(
+                    "SELECT create_hypertable('events', 'timestamp', chunk_time_interval => interval '1 day', if_not_exists => TRUE)"
+                )
+                .execute(&self.pool)
+                .await
+                {
+                    Ok(_) => {
+                        tracing::info!("TimescaleDB hypertable created successfully");
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to create TimescaleDB hypertable, continuing with regular PostgreSQL"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::info!(
+                    error = %e,
+                    "TimescaleDB not available, using standard PostgreSQL"
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -74,6 +110,8 @@ impl DatabaseBackend for PostgresBackend {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_signature ON events(signature)")
             .execute(&self.pool)
             .await?;
+
+        self.try_enable_timescaledb().await?;
 
         tracing::info!("PostgreSQL migrations completed");
         Ok(())
