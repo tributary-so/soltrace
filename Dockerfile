@@ -15,11 +15,11 @@ WORKDIR /app
 COPY . .
 
 # Build dependencies (cached layer)
-RUN cargo build --release
+RUN cargo build --release --features kafka
 RUN ls target/ && pwd target/ && ls target/release/*
 
 # Stage 2: Runtime - Contains only the binaries
-FROM docker.io/library/rust:1.88-bookworm 
+FROM docker.io/library/rust:1.88-bookworm
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \

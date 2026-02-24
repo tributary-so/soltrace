@@ -51,20 +51,23 @@ impl EventQueue for KafkaProducer {
         let key = event.signature.clone();
         let payload = serde_json::to_vec(event)?;
 
-        let record = BaseRecord::to(topic)
-            .key(&key)
-            .payload(&payload);
+        let record = BaseRecord::to(topic).key(&key).payload(&payload);
 
-        match self.producer.send(record) {
-            Ok(_) => {
-                debug!("Sent event to Kafka topic '{}': {}", topic, event.signature);
-                Ok(())
-            }
-            Err((err, _)) => {
-                error!("Failed to send to Kafka: {}", err);
-                Err(anyhow::anyhow!("Kafka send error: {err}"))
-            }
-        }
+        info!(
+            "Sending event to kafka: {} from {}",
+            event.event_name, event.signature
+        );
+
+        self.producer.send(record).map_err(|(e, _)| {
+            error!("Failed to queue message for Kafka: {}", e);
+            anyhow::anyhow!("Kafka queue error: {e}")
+        })?;
+
+        // Flush to ensure message is actually delivered to broker
+        self.producer.flush(std::time::Duration::from_secs(5))?;
+
+        debug!("Sent event to Kafka topic '{}': {}", topic, event.signature);
+        Ok(())
     }
 
     async fn flush(&self) -> anyhow::Result<()> {

@@ -6,7 +6,7 @@ SOLANA_WS_URL=${SOLANA_WS_URL:-wss://api.mainnet-beta.solana.com}
 PROGRAM_PREFIXES=TRibg8W8zmPHQqWtyAD1rEBRXEdyU13Mu6qX1Sg42tJ:tributary
 
 # Database Configuration
-DB_URL=${DB_URL:-sqlite:./data/soltrace.db}
+DB_URL=sqlite:./data/soltrace.db
 IDL_DIR=/idls
 
 # Indexer Configuration
