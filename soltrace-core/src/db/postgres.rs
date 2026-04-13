@@ -81,8 +81,8 @@ impl DatabaseBackend for PostgresBackend {
             CREATE TABLE IF NOT EXISTS events (
                 id BYTEA PRIMARY KEY,
                 slot BIGINT NOT NULL,
-                signature TEXT NOT NULL,
-                event_name TEXT NOT NULL,
+                signature VARCHAR(88) NOT NULL,
+                event_name VARCHAR(64) NOT NULL,
                 data JSONB NOT NULL,
                 timestamp TIMESTAMPTZ NOT NULL
             )
