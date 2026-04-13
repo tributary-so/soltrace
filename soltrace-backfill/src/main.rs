@@ -40,7 +40,7 @@ struct Cli {
     #[arg(short, long, default_value = "./idls", env("IDL_DIR"))]
     idl_dir: String,
 
-    /// Number of signatures to fetch (latest N transactions)
+    /// Page size for signature pagination (fetches ALL transactions)
     #[arg(short, long, default_value = "1000", env("LIMIT"))]
     limit: u64,
 
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
 async fn run_backfill(cli: Cli) -> Result<()> {
     info!("Starting Soltrace Backfill");
     info!("RPC URL: {}", cli.rpc_url);
-    info!("Fetching latest {} signatures per program", cli.limit);
+    info!("Fetching all signatures (page size: {}) per program", cli.limit);
     info!("Batch size: {}", cli.batch_size);
     info!("Concurrency: {}", cli.concurrency);
     info!("Max retries: {}", cli.max_retries);
@@ -164,31 +164,64 @@ async fn run_backfill(cli: Cli) -> Result<()> {
             continue;
         }
 
-        // Get signatures for this program with retry
-        info!("Fetching signatures for program {}...", program_id_str);
+        // Get signatures for this program with pagination
+        info!("Fetching all signatures for program {}...", program_id_str);
 
         use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
-        let signatures = retry_with_rate_limit(
-            || async {
-                let config = GetConfirmedSignaturesForAddress2Config {
-                    before: None,
-                    until: None,
-                    limit: Some(cli.limit as usize),
-                    commitment: Some(CommitmentConfig::confirmed()),
-                };
-                rpc_client.get_signatures_for_address_with_config(&program_id, config)
-            },
-            cli.max_retries,
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to get signatures for {}: {}", program_id_str, e))?;
+        let mut all_signatures = Vec::new();
+        let mut before: Option<solana_sdk::signature::Signature> = None;
+        let page_size = cli.limit as usize;
 
-        let signatures_count = signatures.len();
-        info!("Found {} signatures", signatures_count);
+        loop {
+            let rpc = rpc_client.clone();
+            let page = retry_with_rate_limit(
+                || {
+                    let before = before;
+                    let rpc = rpc.clone();
+                    let program_id = program_id;
+                    async move {
+                        let config = GetConfirmedSignaturesForAddress2Config {
+                            before,
+                            until: None,
+                            limit: Some(page_size),
+                            commitment: Some(CommitmentConfig::confirmed()),
+                        };
+                        rpc.get_signatures_for_address_with_config(&program_id, config)
+                    }
+                },
+                cli.max_retries,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to get signatures for {}: {}", program_id_str, e))?;
+
+            let page_len = page.len();
+            info!("Fetched page of {} signatures (total so far: {})", page_len, all_signatures.len() + page_len);
+
+            if page_len == 0 {
+                break;
+            }
+
+            if let Some(last) = page.last() {
+                before = last
+                    .signature
+                    .parse::<solana_sdk::signature::Signature>()
+                    .ok();
+            }
+
+            all_signatures.extend(page);
+
+            if page_len < page_size {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(cli.batch_delay)).await;
+        }
+
+        let signatures_count = all_signatures.len();
+        info!("Found {} total signatures", signatures_count);
         total_signatures_fetched += signatures_count;
 
-        // Process signatures with concurrency
-        let signature_strings: Vec<String> = signatures
+        let signature_strings: Vec<String> = all_signatures
             .iter()
             .map(|sig| sig.signature.clone())
             .filter(|sig| !processed_signatures.contains(sig))
