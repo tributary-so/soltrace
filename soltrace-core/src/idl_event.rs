@@ -185,29 +185,25 @@ impl IdlEventDecoder {
         obj: &serde_json::Map<String, serde_json::Value>,
         types: &[serde_json::Value],
     ) -> Result<(Value, usize)> {
-        // Handle array type: {"array": ["u8", 64]}
+        // Handle array type: {"array": ["u8", 64]} or {"array": [{"option": ...}, 3]}
         if let Some(array) = obj.get("array") {
             if let Some(arr) = array.as_array() {
                 if arr.len() == 2 {
-                    if let Some(inner_type) = arr[0].as_str() {
-                        if let Some(size) = arr[1].as_u64() {
-                            return Self::decode_fixed_array(
-                                data,
-                                inner_type,
-                                size as usize,
-                                types,
-                            );
-                        }
+                    if let Some(size) = arr[1].as_u64() {
+                        return Self::decode_fixed_array_complex(
+                            data,
+                            &arr[0],
+                            size as usize,
+                            types,
+                        );
                     }
                 }
             }
         }
 
-        // Handle option type: {"option": "u32"}
+        // Handle option type: {"option": "u32"} or {"option": {"defined": {"name": "..."}}}
         if let Some(option) = obj.get("option") {
-            if let Some(inner_type) = option.as_str() {
-                return Self::decode_option(data, inner_type, types);
-            }
+            return Self::decode_option_complex(data, option, types);
         }
 
         // Handle defined type: {"defined": {"name": "SomeType"}}
@@ -225,9 +221,9 @@ impl IdlEventDecoder {
         )))
     }
 
-    fn decode_fixed_array(
+    fn decode_fixed_array_complex(
         data: &[u8],
-        inner_type: &str,
+        inner_type: &serde_json::Value,
         size: usize,
         types: &[serde_json::Value],
     ) -> Result<(Value, usize)> {
@@ -235,12 +231,31 @@ impl IdlEventDecoder {
         let mut offset = 0;
 
         for _ in 0..size {
-            let (value, bytes_read) = Self::decode_simple_type(&data[offset..], inner_type, types)?;
+            let (value, bytes_read) = Self::decode_field(&data[offset..], 0, inner_type, types)?;
             arr.push(value);
             offset += bytes_read;
         }
 
         Ok((Value::Array(arr), offset))
+    }
+
+    fn decode_option_complex(
+        data: &[u8],
+        inner_type: &serde_json::Value,
+        types: &[serde_json::Value],
+    ) -> Result<(Value, usize)> {
+        if data.is_empty() {
+            return Err(SoltraceError::EventDecode(
+                "Unexpected end of data for option".to_string(),
+            ));
+        }
+        let is_some = data[0] != 0;
+        if is_some {
+            let (value, bytes_read) = Self::decode_field(&data[1..], 0, inner_type, types)?;
+            Ok((value, 1 + bytes_read))
+        } else {
+            Ok((Value::Null, 1))
+        }
     }
 
     /// Decode a defined type (enum or struct) from IDL types array
@@ -317,20 +332,31 @@ impl IdlEventDecoder {
         let mut offset = 1;
 
         if let Some(fields) = variant.get("fields").and_then(|f| f.as_array()) {
-            for field in fields {
-                let field_name = field
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("field");
+            for (idx, field) in fields.iter().enumerate() {
+                if let Some(obj) = field.as_object() {
+                    let fallback_name;
+                    let field_name = match obj.get("name").and_then(|n| n.as_str()) {
+                        Some(n) => n,
+                        None => {
+                            fallback_name = format!("field_{}", idx);
+                            &fallback_name
+                        }
+                    };
 
-                let field_type = field.get("type").ok_or_else(|| {
-                    SoltraceError::EventDecode(format!("Field '{}' has no type", field_name))
-                })?;
+                    let field_type = obj.get("type").ok_or_else(|| {
+                        SoltraceError::EventDecode(format!("Field '{}' has no type", field_name))
+                    })?;
 
-                let (value, bytes_read) =
-                    Self::decode_field(&data[offset..], 0, field_type, types)?;
-                result.insert(field_name.to_string(), value);
-                offset += bytes_read;
+                    let (value, bytes_read) =
+                        Self::decode_field(&data[offset..], 0, field_type, types)?;
+                    result.insert(field_name.to_string(), value);
+                    offset += bytes_read;
+                } else {
+                    let field_name = format!("field_{}", idx);
+                    let (value, bytes_read) = Self::decode_field(&data[offset..], 0, field, types)?;
+                    result.insert(field_name, value);
+                    offset += bytes_read;
+                }
             }
         }
 
@@ -367,27 +393,6 @@ impl IdlEventDecoder {
         }
 
         Ok((Value::Object(result), offset))
-    }
-
-    /// Decode an option type for complex types
-    fn decode_option(
-        data: &[u8],
-        inner_type: &str,
-        types: &[serde_json::Value],
-    ) -> Result<(Value, usize)> {
-        if data.is_empty() {
-            return Err(SoltraceError::EventDecode(
-                "Unexpected end of data for option".to_string(),
-            ));
-        }
-        let is_some = data[0] != 0;
-        if is_some {
-            let (value, bytes_read) =
-                Self::decode_field(&data[1..], 0, &serde_json::json!(inner_type), types)?;
-            Ok((value, 1 + bytes_read))
-        } else {
-            Ok((Value::Null, 1))
-        }
     }
 
     /// Read little-endian bytes into an integer type
@@ -706,5 +711,91 @@ mod tests {
 
         let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
         assert!(result["optional_value"].is_null());
+    }
+
+    #[test]
+    fn test_decode_enum_tuple_variant() {
+        let types = vec![serde_json::json!({
+            "name": "Frequency",
+            "type": {
+                "kind": "enum",
+                "variants": [
+                    {"name": "Daily"},
+                    {"name": "Weekly"},
+                    {"name": "Custom", "fields": ["u64"]}
+                ]
+            }
+        })];
+
+        // Frequency::Custom(3600)
+        let mut data = vec![2u8]; // discriminant 2 = Custom
+        data.extend_from_slice(&3600u64.to_le_bytes());
+
+        let fields = vec![IdlField {
+            name: "frequency".to_string(),
+            field_type: serde_json::json!({"defined": {"name": "Frequency"}}),
+        }];
+
+        let result = IdlEventDecoder::decode(&data, &fields, &types).unwrap();
+        let obj = result["frequency"].as_object().unwrap();
+        assert_eq!(obj.get("variant").unwrap(), "Custom");
+        assert_eq!(obj.get("field_0").unwrap(), "3600");
+    }
+
+    #[test]
+    fn test_decode_policy_type_subscription() {
+        let types = vec![
+            serde_json::json!({
+                "name": "PaymentFrequency",
+                "type": {
+                    "kind": "enum",
+                    "variants": [
+                        {"name": "Daily"},
+                        {"name": "Weekly"},
+                        {"name": "Monthly"},
+                        {"name": "Custom", "fields": ["u64"]}
+                    ]
+                }
+            }),
+            serde_json::json!({
+                "name": "PolicyType",
+                "type": {
+                    "kind": "enum",
+                    "variants": [
+                        {
+                            "name": "Subscription",
+                            "fields": [
+                                {"name": "amount", "type": "u64"},
+                                {"name": "auto_renew", "type": "bool"},
+                                {"name": "max_renewals", "type": {"option": "u32"}},
+                                {"name": "payment_frequency", "type": {"defined": {"name": "PaymentFrequency"}}},
+                                {"name": "next_payment_due", "type": "i64"}
+                            ]
+                        }
+                    ]
+                }
+            }),
+        ];
+
+        // PolicyType::Subscription { amount: 1000, auto_renew: true, max_renewals: Some(12), payment_frequency: Monthly(2), next_payment_due: 1700000000 }
+        let mut data = vec![0u8]; // discriminant 0 = Subscription
+        data.extend_from_slice(&1000u64.to_le_bytes()); // amount
+        data.push(1u8); // auto_renew = true
+        data.push(1u8); // option Some
+        data.extend_from_slice(&12u32.to_le_bytes()); // max_renewals
+        data.push(2u8); // PaymentFrequency::Monthly discriminant
+        data.extend_from_slice(&1700000000i64.to_le_bytes()); // next_payment_due
+
+        let fields = vec![IdlField {
+            name: "policy_type".to_string(),
+            field_type: serde_json::json!({"defined": {"name": "PolicyType"}}),
+        }];
+
+        let result = IdlEventDecoder::decode(&data, &fields, &types).unwrap();
+        let obj = result["policy_type"].as_object().unwrap();
+        assert_eq!(obj.get("variant").unwrap(), "Subscription");
+        assert_eq!(obj.get("amount").unwrap(), "1000");
+        assert_eq!(obj.get("auto_renew").unwrap(), true);
+        assert_eq!(obj.get("max_renewals").unwrap(), 12);
     }
 }
