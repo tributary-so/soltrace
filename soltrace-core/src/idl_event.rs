@@ -17,14 +17,11 @@ impl IdlEventDecoder {
             let (value, bytes_read) = Self::decode_field(data, offset, &field.field_type, types)?;
             result.insert(field.name.clone(), value);
             offset += bytes_read;
-        }
 
-        if offset != data.len() {
-            return Err(SoltraceError::EventDecode(format!(
-                "Data length mismatch: decoded {} bytes, but data is {} bytes",
-                offset,
-                data.len()
-            )));
+            // allow backwards compatibility when we add new fields to events!
+            if offset > data.len() {
+                break;
+            }
         }
 
         Ok(Value::Object(result))
