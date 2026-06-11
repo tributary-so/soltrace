@@ -52,6 +52,10 @@ pub trait DatabaseBackend: Send + Sync {
 
     /// Check if an event already exists (by signature)
     async fn event_exists(&self, signature: &str) -> Result<bool>;
+
+    /// Get the most recent signature stored in the database
+    /// Returns None if no events exist
+    async fn get_latest_signature(&self) -> Result<Option<String>>;
 }
 
 /// Database wrapper that holds a dynamic backend
@@ -91,6 +95,10 @@ impl Database {
 
     pub async fn event_exists(&self, signature: &str) -> Result<bool> {
         self.backend.event_exists(signature).await
+    }
+
+    pub async fn get_latest_signature(&self) -> Result<Option<String>> {
+        self.backend.get_latest_signature().await
     }
 }
 

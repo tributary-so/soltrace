@@ -67,19 +67,15 @@ impl MongoDbBackend {
     }
 
     async fn create_indexes(&self) -> Result<()> {
-        // Signature unique index
         let signature_index = IndexModel::builder()
             .keys(doc! { "signature": 1 })
             .options(IndexOptions::builder().unique(true).build())
             .build();
 
-        // Slot index
         let slot_index = IndexModel::builder().keys(doc! { "slot": 1 }).build();
 
-        // Event name index
         let event_name_index = IndexModel::builder().keys(doc! { "event_name": 1 }).build();
 
-        // Timestamp index
         let timestamp_index = IndexModel::builder().keys(doc! { "timestamp": 1 }).build();
 
         self.collection
@@ -198,5 +194,28 @@ impl DatabaseBackend for MongoDbBackend {
             .map_err(|e| SoltraceError::Database(format!("Failed to count events: {}", e)))?;
 
         Ok(count > 0)
+    }
+
+    async fn get_latest_signature(&self) -> Result<Option<String>> {
+        let mut cursor = self
+            .collection
+            .find(doc! {})
+            .sort(doc! { "slot": -1, "timestamp": -1 })
+            .limit(1)
+            .await
+            .map_err(|e| SoltraceError::Database(format!("Failed to query latest signature: {}", e)))?;
+
+        if cursor
+            .advance()
+            .await
+            .map_err(|e| SoltraceError::Database(format!("Failed to advance cursor: {}", e)))?
+        {
+            let doc = cursor.deserialize_current().map_err(|e| {
+                SoltraceError::Database(format!("Failed to deserialize event: {}", e))
+            })?;
+            Ok(Some(doc.signature))
+        } else {
+            Ok(None)
+        }
     }
 }

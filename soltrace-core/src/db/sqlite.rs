@@ -156,4 +156,14 @@ impl DatabaseBackend for SqliteBackend {
 
         Ok(count > 0)
     }
+
+    async fn get_latest_signature(&self) -> Result<Option<String>> {
+        let result: Option<String> = sqlx::query_scalar(
+            "SELECT signature FROM events ORDER BY slot DESC, timestamp DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(result)
+    }
 }
