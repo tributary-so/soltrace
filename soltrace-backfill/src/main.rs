@@ -1,3 +1,7 @@
+// Processing fns thread many RPC/decode/db handles; arg-bundling is out of
+// scope for this change.
+#![allow(clippy::too_many_arguments)]
+
 use anyhow::Result;
 use clap::Parser;
 use solana_client::rpc_client::RpcClient;
@@ -83,7 +87,10 @@ async fn main() -> Result<()> {
 async fn run_backfill(cli: Cli) -> Result<()> {
     info!("Starting Soltrace Backfill");
     info!("RPC URL: {}", cli.rpc_url);
-    info!("Fetching all signatures (page size: {}) per program", cli.limit);
+    info!(
+        "Fetching all signatures (page size: {}) per program",
+        cli.limit
+    );
     info!("Batch size: {}", cli.batch_size);
     info!("Concurrency: {}", cli.concurrency);
     info!("Max retries: {}", cli.max_retries);
@@ -176,9 +183,7 @@ async fn run_backfill(cli: Cli) -> Result<()> {
             let rpc = rpc_client.clone();
             let page = retry_with_rate_limit(
                 || {
-                    let before = before;
                     let rpc = rpc.clone();
-                    let program_id = program_id;
                     async move {
                         let config = GetConfirmedSignaturesForAddress2Config {
                             before,
@@ -192,10 +197,16 @@ async fn run_backfill(cli: Cli) -> Result<()> {
                 cli.max_retries,
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to get signatures for {}: {}", program_id_str, e))?;
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to get signatures for {}: {}", program_id_str, e)
+            })?;
 
             let page_len = page.len();
-            info!("Fetched page of {} signatures (total so far: {})", page_len, all_signatures.len() + page_len);
+            info!(
+                "Fetched page of {} signatures (total so far: {})",
+                page_len,
+                all_signatures.len() + page_len
+            );
 
             if page_len == 0 {
                 break;

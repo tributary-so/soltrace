@@ -1,3 +1,7 @@
+// Live indexer threads many RPC/decode/db/ws handles through async fns;
+// arg-bundling is out of scope for this change.
+#![allow(clippy::too_many_arguments)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
@@ -9,8 +13,9 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    load_idls, process_transaction, retry_with_rate_limit, types::RawEvent, utils::extract_event_from_log,
-    Database, EventDecoder, EventQueue, IdlParser, ProgramPrefixConfig, QueueEvent,
+    cpi_dedup_index, decode_cpi_events, load_idls, process_transaction, retry_with_rate_limit,
+    types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, EventQueue, IdlParser,
+    ProgramPrefixConfig, QueueEvent,
 };
 #[cfg(feature = "kafka")]
 use soltrace_core::{KafkaConfig, KafkaProducer};
@@ -295,6 +300,8 @@ async fn run_indexer(
         reconnect_delay,
         max_reconnects,
         ping_interval,
+        rpc_client,
+        max_retries,
     )
     .await;
 
@@ -353,9 +360,7 @@ async fn gap_backfill(
             let rpc = rpc_client.clone();
             let page = retry_with_rate_limit(
                 || {
-                    let before = before;
                     let rpc = rpc.clone();
-                    let program_id = program_id;
                     let until = until_parsed;
                     async move {
                         let config = GetConfirmedSignaturesForAddress2Config {
@@ -397,7 +402,10 @@ async fn gap_backfill(
 
         let sig_count = all_sigs.len();
         if sig_count == 0 {
-            info!("Gap backfill [{}]: no gap, DB is up to date", program_id_str);
+            info!(
+                "Gap backfill [{}]: no gap, DB is up to date",
+                program_id_str
+            );
             continue;
         }
 
@@ -420,12 +428,13 @@ async fn gap_backfill(
             let tx = retry_with_rate_limit(
                 || {
                     let rpc = rpc_client.clone();
-                    let sig = sig;
                     async move {
                         rpc.get_transaction_with_config(
                             &sig,
                             RpcTransactionConfig {
-                                encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                                encoding: Some(
+                                    solana_transaction_status::UiTransactionEncoding::Json,
+                                ),
                                 commitment: Some(commitment_config),
                                 max_supported_transaction_version: Some(0),
                             },
@@ -438,13 +447,7 @@ async fn gap_backfill(
 
             match tx {
                 Ok(transaction) => {
-                    match process_transaction(
-                        transaction,
-                        program_id_str,
-                        event_decoder,
-                        db,
-                    )
-                    .await
+                    match process_transaction(transaction, program_id_str, event_decoder, db).await
                     {
                         Ok(sigs) => {
                             processed += sigs.len();
@@ -489,6 +492,8 @@ async fn run_websocket_loop(
     reconnect_delay: u64,
     max_reconnects: u32,
     ping_interval: u64,
+    rpc_client: Arc<RpcClient>,
+    max_retries: u32,
 ) -> Result<()> {
     let mut reconnect_count: u32 = 0;
     let program_ids_vec: Vec<_> = program_ids.iter().map(|p| p.to_string()).collect();
@@ -516,6 +521,8 @@ async fn run_websocket_loop(
             kafka_producer.clone(),
             commitment,
             ping_interval,
+            rpc_client.clone(),
+            max_retries,
         )
         .await
         {
@@ -556,6 +563,8 @@ async fn websocket_handler(
     kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     ping_interval: u64,
+    rpc_client: Arc<RpcClient>,
+    max_retries: u32,
 ) -> Result<()> {
     info!("Connecting to WebSocket at: {}", ws_url);
     info!("Monitoring {} program(s):", program_ids.len());
@@ -593,6 +602,7 @@ async fn websocket_handler(
     let event_decoder_clone = event_decoder.clone();
     let kafka_producer_clone = kafka_producer.clone();
     let program_ids_clone: Vec<_> = program_ids.to_vec();
+    let rpc_client_clone = rpc_client;
 
     // Spawn processing task
     let processor_handle = tokio::spawn(async move {
@@ -603,6 +613,9 @@ async fn websocket_handler(
                 &event_decoder_clone,
                 &db_clone,
                 kafka_producer_clone.as_ref(),
+                &rpc_client_clone,
+                commitment_config,
+                max_retries,
             )
             .await
             {
@@ -681,6 +694,9 @@ async fn process_logs_message(
     event_decoder: &EventDecoder,
     db: &Database,
     kafka_producer: Option<&Arc<dyn EventQueue>>,
+    rpc_client: &Arc<RpcClient>,
+    commitment_config: CommitmentConfig,
+    max_retries: u32,
 ) -> Result<usize> {
     use chrono::Utc;
 
@@ -700,7 +716,7 @@ async fn process_logs_message(
         for program_id in program_ids {
             if let Some(event_data) = extract_event_from_log(log) {
                 // Decode event
-                match event_decoder.decode_event(&program_id.to_string(), &signature, &event_data) {
+                match event_decoder.decode_event(&program_id.to_string(), signature, &event_data) {
                     Ok(decoded_event) => {
                         // Create raw event record
                         let raw_event = RawEvent {
@@ -752,6 +768,100 @@ async fn process_logs_message(
                         debug!("Failed to decode event: {}", e);
                     }
                 }
+            }
+        }
+    }
+
+    // emit_cpi! events live in inner instructions, NOT program logs. The WS
+    // log notification only carries the signature; fetch the full transaction
+    // (maxSupportedTransactionVersion=0 expands ALT keys) to access them.
+    //
+    // Decode failures fall back to hex (event.rs) and unknown-discriminator
+    // events are skipped — never crashes the indexer (see decode_cpi_events).
+    let sig = match signature.parse::<solana_sdk::signature::Signature>() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Failed to parse signature {}: {}", signature, e);
+            return Ok(events_found);
+        }
+    };
+
+    let tx_result = retry_with_rate_limit(
+        || {
+            let rpc = rpc_client.clone();
+            async move {
+                rpc.get_transaction_with_config(
+                    &sig,
+                    RpcTransactionConfig {
+                        encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                        commitment: Some(commitment_config),
+                        max_supported_transaction_version: Some(0),
+                    },
+                )
+            }
+        },
+        max_retries,
+    )
+    .await;
+
+    let transaction = match tx_result {
+        Ok(tx) => tx,
+        Err(e) => {
+            warn!("Failed to fetch tx {} for CPI decode: {}", signature, e);
+            return Ok(events_found);
+        }
+    };
+
+    let slot = transaction.slot;
+    let timestamp = transaction
+        .block_time
+        .and_then(|bt| chrono::DateTime::from_timestamp(bt, 0))
+        .unwrap_or_else(Utc::now);
+
+    for (cpi, decoded_event) in decode_cpi_events(&transaction, signature, event_decoder) {
+        let raw_event = RawEvent {
+            slot,
+            signature: signature.clone(),
+            program_id: cpi.program_id,
+            log: String::new(),
+            timestamp,
+        };
+
+        match db
+            .insert_event(
+                &decoded_event,
+                &raw_event,
+                cpi_dedup_index(cpi.outer_index, cpi.inner_index),
+            )
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    "Stored CPI event: {} from {}",
+                    decoded_event.event_name, signature
+                );
+                events_found += 1;
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("UNIQUE constraint") || err_str.contains("duplicate") {
+                    debug!("CPI event {} already exists, skipping", signature);
+                } else {
+                    error!("Failed to store CPI event: {}", e);
+                }
+            }
+        }
+
+        // Send to Kafka if configured
+        if let Some(producer) = kafka_producer {
+            let queue_event = QueueEvent::new(
+                decoded_event.event_name.clone(),
+                signature.clone(),
+                cpi.program_id.to_string(),
+                decoded_event.data.clone(),
+            );
+            if let Err(e) = producer.send(&queue_event).await {
+                error!("Failed to send CPI event to Kafka: {}", e);
             }
         }
     }

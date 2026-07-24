@@ -79,6 +79,41 @@ pub struct RawEvent {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// A resolved inner (CPI) instruction with account keys expanded for versioned
+/// transactions.
+///
+/// Built from `meta.innerInstructions` of a transaction fetched via
+/// `getTransaction` with `maxSupportedTransactionVersion: 0`, which expands
+/// address-lookup-table keys into `accountKeys` so indices resolve directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InnerInstructionInfo {
+    /// Index of the outer instruction this CPI is nested under.
+    pub outer_index: u8,
+    /// Position within the inner-instructions list of that outer instruction.
+    pub inner_index: usize,
+    /// Program invoked by this inner instruction.
+    pub program_id: Pubkey,
+    /// Resolved account pubkeys passed to this inner instruction.
+    pub accounts: Vec<Pubkey>,
+    /// Base58-decoded instruction data.
+    pub data: Vec<u8>,
+}
+
+/// An `emit_cpi!` event extracted from inner instructions, with the 8-byte
+/// `event_cpi` wrapper discriminator stripped. The remaining bytes are
+/// `<event-disc(8)><borsh event data>` — ready for `EventDecoder::decode_event`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpiEvent {
+    /// Index of the outer instruction this CPI is nested under.
+    pub outer_index: u8,
+    /// Position within the inner-instructions list (for dedup).
+    pub inner_index: usize,
+    /// Program that emitted the event (self-CPI target).
+    pub program_id: Pubkey,
+    /// Event bytes after stripping the 8-byte event_cpi wrapper.
+    pub data: Vec<u8>,
+}
+
 /// Configuration for program-to-prefix mapping
 #[derive(Debug, Clone)]
 pub struct ProgramPrefixConfig {
@@ -120,7 +155,7 @@ impl ProgramPrefixConfig {
         &mut self,
         idls: &std::collections::HashMap<String, crate::types::ParsedIdl>,
     ) {
-        for (program_id, _) in idls {
+        for program_id in idls.keys() {
             if !self.program_mappings.contains_key(program_id) {
                 self.program_mappings
                     .entry(program_id.clone())
