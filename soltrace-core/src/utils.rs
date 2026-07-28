@@ -69,6 +69,13 @@ where
     F: FnMut(&Pubkey) -> CoreResult<Option<ParsedIdl>>,
 {
     for program in programs {
+        // ponytail: file-IDL precedence (Decision 1) — file IDLs are loaded
+        // before this call, so any program already in the parser wins and the
+        // on-chain fetch is skipped entirely (no wasted RPC).
+        if parser.get_idls().contains_key(&program.to_string()) {
+            debug!(program = %program, "IDL already loaded (file), skipping on-chain fetch");
+            continue;
+        }
         match fetch(program) {
             Ok(Some(idl)) => {
                 info!(program = %program, "fetched on-chain IDL");
@@ -901,14 +908,118 @@ mod tests {
     }
 
     #[test]
-    fn test_load_onchain_idls_overwrites_same_address() {
+    fn test_load_onchain_idls_preserves_existing_idl() {
+        // Decision 1: file primary — a program already in the parser must NOT be
+        // overwritten by an on-chain fetch. The fetcher must not even be called.
         let mut parser = IdlParser::new();
         let addr = pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
         parser.insert_or_replace(make_idl(&addr.to_string()));
-        load_onchain_idls_with(&mut parser, std::slice::from_ref(&addr), |p| {
-            Ok(Some(make_idl(&p.to_string())))
+        let mut fetch_called = false;
+        load_onchain_idls_with(&mut parser, std::slice::from_ref(&addr), |_| {
+            fetch_called = true;
+            Ok(Some(make_idl("SHOULD_NOT_INSERT")))
         });
 
-        assert_eq!(parser.get_idls().len(), 1, "replace, not duplicate");
+        assert!(!fetch_called, "fetcher must not be called for existing IDL");
+        assert_eq!(parser.get_idls().len(), 1, "existing IDL must not be replaced");
+        assert!(parser
+            .get_idls()
+            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
+    }
+
+    // --- Epic 1 integration tests (soltrace-as68) ---
+
+    use std::io::Write as _;
+
+    /// Build a program-metadata Metadata account blob (zlib+utf8+Direct)
+    /// carrying `idl_json` for `program`. Mirrors the onchain_idl::tests layout.
+    fn metadata_blob(program: &Pubkey, idl_json: &[u8]) -> Vec<u8> {
+        use spl_program_metadata_client::types::{Compression, DataSource, Encoding};
+
+        let mut enc =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(idl_json).unwrap();
+        let data = enc.finish().unwrap();
+
+        let mut seed = [0u8; 16];
+        seed[..3].copy_from_slice(b"idl");
+        let mut buf = Vec::new();
+        buf.push(2u8); // disc = Metadata
+        buf.extend_from_slice(program.as_ref()); // program (32)
+        buf.extend_from_slice(&[0u8; 32]); // authority = None
+        buf.push(1); // mutable
+        buf.push(1); // canonical
+        buf.extend_from_slice(&seed); // seed (16)
+        buf.push(Encoding::Utf8 as u8);
+        buf.push(Compression::Zlib as u8);
+        buf.push(1u8); // format = Json
+        buf.push(DataSource::Direct as u8);
+        buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&data);
+        buf
+    }
+
+    /// File IDL (program A) + on-chain decoded IDL (program B) coexist in the
+    /// parser after load_onchain_idls_with processes a real Metadata blob.
+    #[test]
+    fn test_epic1_file_and_onchain_coexist() {
+        let file_prog = pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        let onchain_prog = pk("11111111111111111111111111111111");
+
+        let mut parser = IdlParser::new();
+        parser
+            .load_from_str(
+                r#"{"name":"File","events":[],"address":"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}"#,
+            )
+            .unwrap();
+
+        let blob = metadata_blob(
+            &onchain_prog,
+            br#"{"name":"Chain","events":[],"address":"11111111111111111111111111111111"}"#,
+        );
+
+        load_onchain_idls_with(&mut parser, &[onchain_prog], |p| {
+            crate::onchain_idl::decode_metadata_account(&blob, p)
+        });
+
+        let idls = parser.get_idls();
+        assert_eq!(idls.len(), 2, "file + on-chain IDLs must coexist");
+        assert!(idls.contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
+        assert!(idls.contains_key("11111111111111111111111111111111"));
+        assert_eq!(
+            idls.get("11111111111111111111111111111111")
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Chain"),
+            "on-chain IDL must be the decoded value"
+        );
+    }
+
+    /// ArcSwap hot-reload: EventDecoder reader observes a swapped-in IDL
+    /// (simulates a live subscription pushing a new on-chain IDL).
+    #[test]
+    fn test_epic1_arcswap_reader_sees_swapped_idl() {
+        let prog = pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+        // v1: empty parser (IDL not yet fetched).
+        let shared = std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(IdlParser::new()));
+        let decoder = EventDecoder::new(shared.clone(), ProgramPrefixConfig::new());
+
+        let disc = IdlParser::calculate_discriminator("Swap");
+        let payload: Vec<u8> = disc.iter().copied().chain(42u64.to_le_bytes()).collect();
+
+        // Before swap: no IDL → decode fails cleanly.
+        assert!(decoder.decode_event(&prog.to_string(), "sig", &payload).is_err());
+
+        // Swap in a parser with the Swap event (on-chain IDL arrived).
+        shared.store(std::sync::Arc::new(swap_idl(&prog)));
+
+        // After swap: decode succeeds — reader sees the new state without panic.
+        let decoded = decoder
+            .decode_event(&prog.to_string(), "sig", &payload)
+            .expect("reader must see the swapped-in IDL");
+        assert_eq!(decoded.event_name, "default_Swap");
+        assert_eq!(decoded.data["amount"], "42");
     }
 }
