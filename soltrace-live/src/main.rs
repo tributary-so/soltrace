@@ -2,6 +2,8 @@
 // arg-bundling is out of scope for this change.
 #![allow(clippy::too_many_arguments)]
 
+mod idl_subscription;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
