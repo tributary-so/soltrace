@@ -21,8 +21,11 @@ pub use queue::{EventQueue, QueueEvent};
 pub use queue::kafka::{KafkaConfig, KafkaProducer};
 pub use retry::{concurrent_process, process_batches, retry_with_backoff, retry_with_rate_limit};
 pub use types::DecodedEvent;
-pub use types::{EventDiscriminator, ProgramId, ProgramPrefixConfig, Slot};
-pub use utils::{extract_event_from_log, load_idls, process_transaction};
+pub use types::{EventDiscriminator, CpiEvent, InnerInstructionInfo, ProgramId, ProgramPrefixConfig, Slot};
+pub use utils::{
+    cpi_dedup_index, decode_cpi_events, extract_cpi_events, extract_event_from_log,
+    extract_inner_instructions, load_idls, process_transaction, EVENT_CPI_DISCRIMINATOR,
+};
 pub use validation::{
     validate_program_id, validate_program_ids, validate_rpc_url, validate_ws_url,
 };

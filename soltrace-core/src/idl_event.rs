@@ -206,12 +206,37 @@ impl IdlEventDecoder {
             return Self::decode_option_complex(data, option, types);
         }
 
-        // Handle defined type: {"defined": {"name": "SomeType"}}
+        // Handle vec type: {"vec": "u32"} or {"vec": {"defined": "T"}}. This is
+        // the JSON-object form Anchor IDLs emit for vectors; without it, any
+        // event with a vec field hex-falls-back.
+        // borsh vec layout: u32 length prefix + `len` contiguous items.
+        if let Some(vec_inner) = obj.get("vec") {
+            if data.len() < 4 {
+                return Err(SoltraceError::EventDecode(
+                    "Not enough data for vec length".to_string(),
+                ));
+            }
+            let len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+            let mut arr = Vec::with_capacity(len);
+            let mut total = 4;
+            for _ in 0..len {
+                let (value, bytes_read) = Self::decode_field(&data[total..], 0, vec_inner, types)?;
+                arr.push(value);
+                total += bytes_read;
+            }
+            return Ok((Value::Array(arr), total));
+        }
+
+        // Handle defined type. Accept both the new IDL spec form
+        // `{"defined": {"name": "SomeType"}}` and the legacy/anchor form
+        // `{"defined": "SomeType"}` (a bare string) — older deployed IDLs use
+        // the latter.
         if let Some(defined) = obj.get("defined") {
-            if let Some(name) = defined.get("name") {
-                if let Some(type_name) = name.as_str() {
-                    return Self::decode_defined_type(data, type_name, types);
-                }
+            let type_name = defined
+                .as_str()
+                .or_else(|| defined.get("name").and_then(|n| n.as_str()));
+            if let Some(type_name) = type_name {
+                return Self::decode_defined_type(data, type_name, types);
             }
         }
 
@@ -640,6 +665,29 @@ mod tests {
         assert_eq!(arr[1], 2);
         assert_eq!(arr[2], 3);
         assert_eq!(arr[3], 4);
+    }
+
+    #[test]
+    fn test_decode_vec_object_form() {
+        // {"vec": "u32"} — the JSON-object form Anchor IDLs emit for vectors.
+        // borsh vec = u32 length prefix + items. Without the object-form
+        // branch this hex-falls-back.
+        let mut data = vec![];
+        data.extend_from_slice(&3u32.to_le_bytes()); // length = 3
+        for v in [10u32, 20, 30] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+
+        let fields = vec![IdlField {
+            name: "values".to_string(),
+            field_type: serde_json::json!({"vec": "u32"}),
+        }];
+
+        let result = IdlEventDecoder::decode(&data, &fields, &[]).unwrap();
+        let arr = result["values"].as_array().expect("vec -> JSON array");
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0].as_u64(), Some(10));
+        assert_eq!(arr[2].as_u64(), Some(30));
     }
 
     #[test]

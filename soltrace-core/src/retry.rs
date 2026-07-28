@@ -156,7 +156,7 @@ where
     Fut: std::future::Future<Output = Vec<Result<R, E>>> + Send,
 {
     let total_items = items.len();
-    let total_batches = (total_items + batch_size - 1) / batch_size;
+    let total_batches = total_items.div_ceil(batch_size);
     let mut results = Vec::with_capacity(total_items);
 
     for (batch_num, batch) in items.chunks(batch_size).enumerate() {

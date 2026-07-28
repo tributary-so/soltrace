@@ -1,13 +1,21 @@
+// Live indexer threads many RPC/decode/db/ws handles through async fns;
+// arg-bundling is out of scope for this change.
+#![allow(clippy::too_many_arguments)]
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
-use solana_client::rpc_config::{RpcTransactionLogsConfig, RpcTransactionLogsFilter};
+use solana_client::rpc_client::RpcClient;
+use solana_client::rpc_config::{
+    RpcTransactionConfig, RpcTransactionLogsConfig, RpcTransactionLogsFilter,
+};
 use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    load_idls, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, EventQueue,
-    IdlParser, ProgramPrefixConfig, QueueEvent,
+    cpi_dedup_index, decode_cpi_events, load_idls, process_transaction, retry_with_rate_limit,
+    types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, EventQueue, IdlParser,
+    ProgramPrefixConfig, QueueEvent,
 };
 #[cfg(feature = "kafka")]
 use soltrace_core::{KafkaConfig, KafkaProducer};
@@ -15,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Soltrace Live - Real-time Solana event indexer via WebSocket
 #[derive(Parser)]
@@ -45,7 +53,7 @@ enum Commands {
         )]
         ws_url: String,
 
-        /// Solana RPC HTTP URL (for initial validation)
+        /// Solana RPC HTTP URL (for gap backfill and validation)
         #[arg(
             short,
             long,
@@ -85,6 +93,14 @@ enum Commands {
         /// Kafka broker URLs (comma-separated, enables Kafka if set)
         #[arg(long, env("KAFKA_BROKERS"))]
         kafka_brokers: Option<String>,
+
+        /// Maximum retry attempts for gap backfill RPC requests
+        #[arg(long, default_value = "3", env("MAX_RETRIES"))]
+        max_retries: u32,
+
+        /// Disable gap backfill on startup
+        #[arg(long, env("NO_GAP_BACKFILL"))]
+        no_gap_backfill: bool,
     },
 }
 
@@ -115,6 +131,8 @@ async fn main() -> Result<()> {
             max_reconnects,
             ping_interval,
             kafka_brokers,
+            max_retries,
+            no_gap_backfill,
         } => {
             run_indexer(
                 ws_url,
@@ -127,6 +145,8 @@ async fn main() -> Result<()> {
                 max_reconnects,
                 ping_interval,
                 kafka_brokers,
+                max_retries,
+                no_gap_backfill,
             )
             .await?;
         }
@@ -155,6 +175,8 @@ async fn run_indexer(
     max_reconnects: u32,
     ping_interval: u64,
     kafka_brokers: Option<String>,
+    max_retries: u32,
+    no_gap_backfill: bool,
 ) -> Result<()> {
     info!("Starting Soltrace Live indexer");
     info!("RPC URL: {}", rpc_url);
@@ -237,8 +259,38 @@ async fn run_indexer(
     // Create event decoder
     let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
 
+    // Initialize RPC client for gap backfill
+    let rpc_client = Arc::new(RpcClient::new(rpc_url.clone()));
+
+    // Spawn gap backfill concurrently with WebSocket
+    let backfill_handle = if !no_gap_backfill {
+        let db_clone = db.clone();
+        let event_decoder_clone = event_decoder.clone();
+        let rpc_client_clone = rpc_client.clone();
+        let kafka_producer_clone = kafka_producer.clone();
+        let program_ids_clone = program_ids.clone();
+        let commitment_clone = commitment.clone();
+        let max_retries_clone = max_retries;
+
+        Some(tokio::spawn(async move {
+            gap_backfill(
+                &rpc_client_clone,
+                &program_ids_clone,
+                &event_decoder_clone,
+                &db_clone,
+                kafka_producer_clone.as_ref(),
+                &commitment_clone,
+                max_retries_clone,
+            )
+            .await
+        }))
+    } else {
+        info!("Gap backfill disabled");
+        None
+    };
+
     // Start WebSocket subscription with auto-reconnect
-    run_websocket_loop(
+    let ws_result = run_websocket_loop(
         &ws_url,
         &pubkeys,
         event_decoder,
@@ -248,10 +300,186 @@ async fn run_indexer(
         reconnect_delay,
         max_reconnects,
         ping_interval,
+        rpc_client,
+        max_retries,
     )
-    .await?;
+    .await;
 
-    Ok(())
+    // Wait for backfill to complete (if still running when WS exits)
+    if let Some(handle) = backfill_handle {
+        match handle.await {
+            Ok(Ok(count)) => info!("Gap backfill completed: {} events backfilled", count),
+            Ok(Err(e)) => error!("Gap backfill failed: {}", e),
+            Err(e) => error!("Gap backfill task panicked: {}", e),
+        }
+    }
+
+    ws_result
+}
+
+async fn gap_backfill(
+    rpc_client: &Arc<RpcClient>,
+    program_ids: &[String],
+    event_decoder: &Arc<EventDecoder>,
+    db: &Arc<Database>,
+    _kafka_producer: Option<&Arc<dyn EventQueue>>,
+    commitment: &str,
+    max_retries: u32,
+) -> Result<usize> {
+    let latest_sig = db.get_latest_signature().await?;
+    let latest_sig = match latest_sig {
+        Some(sig) => {
+            info!("Gap backfill: latest stored signature = {}", sig);
+            sig
+        }
+        None => {
+            info!("Gap backfill: no events in DB, skipping gap fill");
+            return Ok(0);
+        }
+    };
+
+    let until_parsed = latest_sig
+        .parse::<solana_sdk::signature::Signature>()
+        .map_err(|e| anyhow::anyhow!("Invalid signature {}: {}", latest_sig, e))?;
+
+    let commitment_config = parse_commitment(commitment)?;
+    let mut total_events = 0;
+
+    use solana_client::rpc_client::GetConfirmedSignaturesForAddress2Config;
+
+    for program_id_str in program_ids {
+        let program_id = program_id_str
+            .parse::<Pubkey>()
+            .map_err(|e| anyhow::anyhow!("Invalid program ID: {}", e))?;
+
+        let mut all_sigs = Vec::new();
+        let mut before: Option<solana_sdk::signature::Signature> = None;
+        let page_size = 1000usize;
+
+        loop {
+            let rpc = rpc_client.clone();
+            let page = retry_with_rate_limit(
+                || {
+                    let rpc = rpc.clone();
+                    let until = until_parsed;
+                    async move {
+                        let config = GetConfirmedSignaturesForAddress2Config {
+                            before,
+                            until: Some(until),
+                            limit: Some(page_size),
+                            commitment: Some(commitment_config),
+                        };
+                        rpc.get_signatures_for_address_with_config(&program_id, config)
+                    }
+                },
+                max_retries,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Gap backfill failed for {}: {}", program_id_str, e))?;
+
+            let page_len = page.len();
+            if page_len == 0 {
+                break;
+            }
+
+            all_sigs.extend(page);
+
+            if page_len < page_size {
+                break;
+            }
+
+            if let Some(last) = all_sigs.last() {
+                before = last
+                    .signature
+                    .parse::<solana_sdk::signature::Signature>()
+                    .ok();
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        all_sigs.reverse();
+
+        let sig_count = all_sigs.len();
+        if sig_count == 0 {
+            info!(
+                "Gap backfill [{}]: no gap, DB is up to date",
+                program_id_str
+            );
+            continue;
+        }
+
+        info!(
+            "Gap backfill [{}]: found {} signature(s) in gap",
+            program_id_str, sig_count
+        );
+
+        let mut processed = 0;
+        for sig_info in &all_sigs {
+            if let Some(_err) = &sig_info.err {
+                continue;
+            }
+
+            let sig = sig_info
+                .signature
+                .parse::<solana_sdk::signature::Signature>()
+                .map_err(|e| anyhow::anyhow!("Invalid signature: {}", e))?;
+
+            let tx = retry_with_rate_limit(
+                || {
+                    let rpc = rpc_client.clone();
+                    async move {
+                        rpc.get_transaction_with_config(
+                            &sig,
+                            RpcTransactionConfig {
+                                encoding: Some(
+                                    solana_transaction_status::UiTransactionEncoding::Json,
+                                ),
+                                commitment: Some(commitment_config),
+                                max_supported_transaction_version: Some(0),
+                            },
+                        )
+                    }
+                },
+                max_retries,
+            )
+            .await;
+
+            match tx {
+                Ok(transaction) => {
+                    match process_transaction(transaction, program_id_str, event_decoder, db).await
+                    {
+                        Ok(sigs) => {
+                            processed += sigs.len();
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Gap backfill: failed to process tx {}: {}",
+                                sig_info.signature, e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Gap backfill: failed to fetch tx {}: {}",
+                        sig_info.signature, e
+                    );
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        info!(
+            "Gap backfill [{}]: {} events from {} signatures",
+            program_id_str, processed, sig_count
+        );
+        total_events += processed;
+    }
+
+    info!("Gap backfill complete: {} total events", total_events);
+    Ok(total_events)
 }
 
 async fn run_websocket_loop(
@@ -264,6 +492,8 @@ async fn run_websocket_loop(
     reconnect_delay: u64,
     max_reconnects: u32,
     ping_interval: u64,
+    rpc_client: Arc<RpcClient>,
+    max_retries: u32,
 ) -> Result<()> {
     let mut reconnect_count: u32 = 0;
     let program_ids_vec: Vec<_> = program_ids.iter().map(|p| p.to_string()).collect();
@@ -291,6 +521,8 @@ async fn run_websocket_loop(
             kafka_producer.clone(),
             commitment,
             ping_interval,
+            rpc_client.clone(),
+            max_retries,
         )
         .await
         {
@@ -331,6 +563,8 @@ async fn websocket_handler(
     kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     ping_interval: u64,
+    rpc_client: Arc<RpcClient>,
+    max_retries: u32,
 ) -> Result<()> {
     info!("Connecting to WebSocket at: {}", ws_url);
     info!("Monitoring {} program(s):", program_ids.len());
@@ -368,6 +602,7 @@ async fn websocket_handler(
     let event_decoder_clone = event_decoder.clone();
     let kafka_producer_clone = kafka_producer.clone();
     let program_ids_clone: Vec<_> = program_ids.to_vec();
+    let rpc_client_clone = rpc_client;
 
     // Spawn processing task
     let processor_handle = tokio::spawn(async move {
@@ -378,6 +613,9 @@ async fn websocket_handler(
                 &event_decoder_clone,
                 &db_clone,
                 kafka_producer_clone.as_ref(),
+                &rpc_client_clone,
+                commitment_config,
+                max_retries,
             )
             .await
             {
@@ -456,6 +694,9 @@ async fn process_logs_message(
     event_decoder: &EventDecoder,
     db: &Database,
     kafka_producer: Option<&Arc<dyn EventQueue>>,
+    rpc_client: &Arc<RpcClient>,
+    commitment_config: CommitmentConfig,
+    max_retries: u32,
 ) -> Result<usize> {
     use chrono::Utc;
 
@@ -475,7 +716,7 @@ async fn process_logs_message(
         for program_id in program_ids {
             if let Some(event_data) = extract_event_from_log(log) {
                 // Decode event
-                match event_decoder.decode_event(&program_id.to_string(), &signature, &event_data) {
+                match event_decoder.decode_event(&program_id.to_string(), signature, &event_data) {
                     Ok(decoded_event) => {
                         // Create raw event record
                         let raw_event = RawEvent {
@@ -527,6 +768,100 @@ async fn process_logs_message(
                         debug!("Failed to decode event: {}", e);
                     }
                 }
+            }
+        }
+    }
+
+    // emit_cpi! events live in inner instructions, NOT program logs. The WS
+    // log notification only carries the signature; fetch the full transaction
+    // (maxSupportedTransactionVersion=0 expands ALT keys) to access them.
+    //
+    // Decode failures fall back to hex (event.rs) and unknown-discriminator
+    // events are skipped — never crashes the indexer (see decode_cpi_events).
+    let sig = match signature.parse::<solana_sdk::signature::Signature>() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Failed to parse signature {}: {}", signature, e);
+            return Ok(events_found);
+        }
+    };
+
+    let tx_result = retry_with_rate_limit(
+        || {
+            let rpc = rpc_client.clone();
+            async move {
+                rpc.get_transaction_with_config(
+                    &sig,
+                    RpcTransactionConfig {
+                        encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                        commitment: Some(commitment_config),
+                        max_supported_transaction_version: Some(0),
+                    },
+                )
+            }
+        },
+        max_retries,
+    )
+    .await;
+
+    let transaction = match tx_result {
+        Ok(tx) => tx,
+        Err(e) => {
+            warn!("Failed to fetch tx {} for CPI decode: {}", signature, e);
+            return Ok(events_found);
+        }
+    };
+
+    let slot = transaction.slot;
+    let timestamp = transaction
+        .block_time
+        .and_then(|bt| chrono::DateTime::from_timestamp(bt, 0))
+        .unwrap_or_else(Utc::now);
+
+    for (cpi, decoded_event) in decode_cpi_events(&transaction, signature, event_decoder) {
+        let raw_event = RawEvent {
+            slot,
+            signature: signature.clone(),
+            program_id: cpi.program_id,
+            log: String::new(),
+            timestamp,
+        };
+
+        match db
+            .insert_event(
+                &decoded_event,
+                &raw_event,
+                cpi_dedup_index(cpi.outer_index, cpi.inner_index),
+            )
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    "Stored CPI event: {} from {}",
+                    decoded_event.event_name, signature
+                );
+                events_found += 1;
+            }
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("UNIQUE constraint") || err_str.contains("duplicate") {
+                    debug!("CPI event {} already exists, skipping", signature);
+                } else {
+                    error!("Failed to store CPI event: {}", e);
+                }
+            }
+        }
+
+        // Send to Kafka if configured
+        if let Some(producer) = kafka_producer {
+            let queue_event = QueueEvent::new(
+                decoded_event.event_name.clone(),
+                signature.clone(),
+                cpi.program_id.to_string(),
+                decoded_event.data.clone(),
+            );
+            if let Err(e) = producer.send(&queue_event).await {
+                error!("Failed to send CPI event to Kafka: {}", e);
             }
         }
     }
