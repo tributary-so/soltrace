@@ -5,7 +5,7 @@ status: todo
 type: task
 priority: normal
 created_at: 2026-07-28T08:31:44Z
-updated_at: 2026-07-28T11:35:03Z
+updated_at: 2026-07-28T11:41:37Z
 parent: soltrace-sfg2
 ---
 
@@ -58,3 +58,13 @@ Verified missing in worktree:
 This task consumes all three as its public API. Building them here would duplicate Epic 1's lane (`soltrace-ipo0` branch) and create merge conflicts.
 
 `hordr blocked` is not a registered command in this hordr version (0.1.0); no programmatic lane-release available. Bean left at `todo`. Re-dispatch once `soltrace-ipo0` lands its primitives.\n\nRe-verified 2026-07-28T11:30Z: `soltrace-ipo0` still `todo`; all three primitives still absent in worktree (onchain_idl.rs missing, no insert_or_replace/remove, EventDecoder.idl_parser still IdlParser). Blocker holds. `hordr blocked` still not a registered command (hordr 0.1.0).
+
+
+Re-verified 2026-07-28T(current): Blocker still holds. `soltrace-ipo0` is still `todo`; all six of its children still `todo` (incl. `soltrace-nqfd` "Add deps" — the first step — not started). All three primitives still absent in worktree:
+- `soltrace-core/src/onchain_idl.rs` — missing (no `derive_canonical_idl_pda`, no `decode_metadata_account`)
+- `IdlParser` — no `insert_or_replace` / `remove` (idl.rs)
+- `EventDecoder.idl_parser` — still `IdlParser`, not `Arc<ArcSwap<IdlParser>>` (event.rs:10)
+
+`hordr blocked` is not a registered command in hordr 0.1.0 (commands: cleanup, done, finish, help, prime, run). No programmatic lane-release available. Bean remains `todo`. Re-dispatch once `soltrace-ipo0` lands its primitives (`onchain_idl.rs`, `insert_or_replace`/`remove`, arc-swap `EventDecoder` field).
+
+Re-verified 2026-07-28T11:41Z: blocker still holds. soltrace-ipo0 + all 6 children still todo. Primitives still absent (onchain_idl.rs missing; no insert_or_replace/remove; EventDecoder.idl_parser still IdlParser not Arc<ArcSwap>). hordr blocked not a command in 0.1.0. Bean stays todo.
