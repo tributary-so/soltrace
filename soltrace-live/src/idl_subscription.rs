@@ -355,4 +355,154 @@ mod tests {
         assert_eq!(backoff_delay(11), 60);
         assert_eq!(backoff_delay(100), 60);
     }
+
+    // ── Arc-swap visibility: concurrent writer + reader never tears ─────
+    //
+    // Mirrors event.rs::arcswap_load_never_tears_under_concurrent_swap.
+    // A writer hammers handle_account_notification (full clone+store per push)
+    // while a reader loads the parser and inspects IDL fields. The reader must
+    // never observe a torn/partial state — always a coherent old or new revision.
+
+    #[test]
+    fn concurrent_swap_and_read_never_tears() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let parser = empty_parser();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = vec![];
+
+        // Writer
+        {
+            let parser = parser.clone();
+            let stop = stop.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut i = 0u32;
+                while !stop.load(Ordering::Relaxed) {
+                    let idl = format!(
+                        r#"{{"name":"V{}","events":[],"address":"{}"}}"#,
+                        i % 200, PROGRAM_STR
+                    );
+                    let blob = build_idl_account(&PROGRAM, true, 0, idl.as_bytes());
+                    handle_account_notification(&PROGRAM, Some(&blob), &parser);
+                    i += 1;
+                }
+            }));
+        }
+
+        // Readers
+        for _ in 0..3 {
+            let parser = parser.clone();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..5_000 {
+                    let loaded = parser.load();
+                    if let Some(idl) = loaded.get_idls().get(PROGRAM_STR) {
+                        let name = idl.name.as_ref().expect("name present if IDL exists");
+                        assert!(
+                            name.starts_with('V'),
+                            "torn read: name={name}"
+                        );
+                    }
+                    // Empty (pre-first-write) is also valid — just not partial.
+                }
+            }));
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        stop.store(true, Ordering::Relaxed);
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        assert!(parser.load().get_idls().contains_key(PROGRAM_STR));
+    }
+
+    // ── Multi-program: independent swaps ───────────────────────────────
+
+    #[test]
+    fn multiple_programs_swap_independently() {
+        let parser = empty_parser();
+        let prog_b = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        let prog_b_str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+
+        let idl_a = idl_json();
+        let idl_b: Vec<u8> = format!(
+            r#"{{"name":"IDB","events":[],"address":"{}"}}"#,
+            prog_b_str
+        )
+        .into_bytes();
+
+        let blob_a = build_idl_account(&PROGRAM, true, 0, &idl_a);
+        let blob_b = build_idl_account(&prog_b, true, 0, &idl_b);
+
+        handle_account_notification(&PROGRAM, Some(&blob_a), &parser);
+        handle_account_notification(&prog_b, Some(&blob_b), &parser);
+
+        let loaded = parser.load();
+        assert_eq!(loaded.get_idls().len(), 2);
+        assert_eq!(
+            loaded.get_idls().get(PROGRAM_STR).unwrap().name.as_deref(),
+            Some("TestIDL")
+        );
+        assert_eq!(
+            loaded.get_idls().get(prog_b_str).unwrap().name.as_deref(),
+            Some("IDB")
+        );
+    }
+
+    // ── Close one program leaves others intact ─────────────────────────
+
+    #[test]
+    fn close_one_program_leaves_others_intact() {
+        let parser = empty_parser();
+        let prog_b = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        let prog_b_str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+
+        // Seed both
+        handle_account_notification(
+            &PROGRAM,
+            Some(&build_idl_account(&PROGRAM, true, 0, &idl_json())),
+            &parser,
+        );
+        handle_account_notification(
+            &prog_b,
+            Some(&build_idl_account(
+                &prog_b,
+                true,
+                0,
+                format!(r#"{{"name":"B","events":[],"address":"{}"}}"#, prog_b_str).as_bytes(),
+            )),
+            &parser,
+        );
+
+        // Close A
+        handle_account_notification(&PROGRAM, None, &parser);
+
+        let loaded = parser.load();
+        assert!(!loaded.get_idls().contains_key(PROGRAM_STR));
+        assert!(loaded.get_idls().contains_key(prog_b_str));
+    }
+
+    // ── WS connection failure → Err (reconnect path trigger) ───────────
+    //
+    // ponytail: port 1 gives instant connection-refused — exercises the
+    // PubsubClient::new Err → Err("WS connect failed") path without a mock.
+    // The full reconnect-loop re-subscribe behaviour (all PDAs re-subscribed on
+    // reconnect) requires a mock WS server; per the bean's skip clause it is
+    // verified manually (localnet demo). The backoff_delay test covers the
+    // timing; this test covers the error propagation.
+
+    #[tokio::test]
+    async fn session_returns_err_when_ws_unreachable() {
+        let parser = empty_parser();
+        let result = run_subscription_session(
+            &[PROGRAM],
+            "ws://127.0.0.1:1",
+            CommitmentConfig::confirmed(),
+            &parser,
+        )
+        .await;
+        assert!(result.is_err(), "dead endpoint should return Err, got {result:?}");
+        // Parser untouched.
+        assert!(parser.load().get_idls().is_empty());
+    }
 }
