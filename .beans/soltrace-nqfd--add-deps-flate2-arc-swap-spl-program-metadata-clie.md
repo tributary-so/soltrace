@@ -1,11 +1,11 @@
 ---
 # soltrace-nqfd
 title: 'Add deps: flate2, arc-swap, spl-program-metadata-client'
-status: in-progress
+status: todo
 type: task
 priority: normal
 created_at: 2026-07-28T08:31:17Z
-updated_at: 2026-07-28T08:52:24Z
+updated_at: 2026-07-28T08:55:02Z
 parent: soltrace-ipo0
 blocked_by:
     - soltrace-1eto
