@@ -3,8 +3,9 @@
 title: Implement soltrace-live/src/idl_subscription.rs
 status: todo
 type: task
+priority: normal
 created_at: 2026-07-28T08:31:44Z
-updated_at: 2026-07-28T08:31:44Z
+updated_at: 2026-07-28T08:45:02Z
 parent: soltrace-sfg2
 ---
 
@@ -44,3 +45,16 @@ If mocking PubsubClient is too heavy, structure the code so the per-notification
 - cargo test -p soltrace-live green
 - cargo clippy -p soltrace-live -- -D warnings
 - Manual: run against a localnet with a program that has a program-metadata IDL account, trigger a SetData, verify log shows the swap
+
+## Blocker (verified 2026-07-28T08:40:19Z)
+
+Cannot implement. Unmet cross-epic dependency on `soltrace-ipo0` (Core on-chain IDL fetch+decode primitives), which is `todo` and only just starting (currentTask: `soltrace-nqfd` = add deps).
+
+Verified missing in worktree:
+- `soltrace-core/src/onchain_idl.rs` does not exist (no `derive_canonical_idl_pda`, no `decode_metadata_account`)
+- `IdlParser` has no `insert_or_replace` / `remove` (idl.rs)
+- `EventDecoder.idl_parser` is still `IdlParser`, not `Arc<ArcSwap<IdlParser>>` (event.rs:10)
+
+This task consumes all three as its public API. Building them here would duplicate Epic 1's lane (`soltrace-ipo0` branch) and create merge conflicts.
+
+`hordr blocked` is not a registered command in this hordr version (0.1.0); no programmatic lane-release available. Bean left at `todo`. Re-dispatch once `soltrace-ipo0` lands its primitives.
