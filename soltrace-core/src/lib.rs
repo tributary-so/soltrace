@@ -3,6 +3,7 @@ pub mod error;
 pub mod event;
 pub mod idl;
 pub mod idl_event;
+pub mod onchain_idl;
 pub mod queue;
 pub mod retry;
 pub mod types;
@@ -13,6 +14,9 @@ pub use error::{Result, SoltraceError};
 pub use event::EventDecoder;
 pub use idl::IdlParser;
 pub use idl_event::IdlEventDecoder;
+pub use onchain_idl::{
+    decode_metadata_account, derive_canonical_idl_pda, fetch_canonical_idl, PROGRAM_METADATA_ID,
+};
 pub use queue::{EventQueue, QueueEvent};
 #[cfg(feature = "kafka")]
 pub use queue::kafka::{KafkaConfig, KafkaProducer};

@@ -7728,6 +7728,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "solana-account-decoder",
+ "solana-rpc-client",
  "solana-sdk 4.0.0",
  "solana-transaction-status",
  "spl-program-metadata-client",
