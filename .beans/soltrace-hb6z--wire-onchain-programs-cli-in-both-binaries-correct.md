@@ -3,9 +3,16 @@
 title: Wire --onchain-programs CLI in both binaries + correct startup ordering
 status: todo
 type: task
+priority: normal
 created_at: 2026-07-28T08:32:14Z
-updated_at: 2026-07-28T08:32:14Z
+updated_at: 2026-07-28T08:40:56Z
 parent: soltrace-87oa
+blocked_by:
+    - soltrace-nqfd
+    - soltrace-n63g
+    - soltrace-nc4t
+    - soltrace-tahu
+    - soltrace-dq3b
 ---
 
 See MS soltrace-z9wq HANDOFF (Decision 2 + ordering in section 3).
@@ -39,3 +46,15 @@ soltrace-backfill: same but skip step (g). One-shot fetch only.
 - Invalid base58 -> non-zero exit with clear error
 - Existing operators (no flag) -> identical behavior to today
 - cargo test --workspace green
+
+## Blocked
+
+Cannot proceed — all upstream dependencies are unmet:
+
+- `soltrace-nqfd` (add deps flate2/arc-swap/spl-program-metadata-client): todo
+- `soltrace-n63g` (`onchain_idl.rs` PDA+decode+fetch): todo — `load_onchain_idls` doesn't exist
+- `soltrace-nc4t` (EventDecoder arc-swap signature change): todo — `EventDecoder` still takes `IdlParser` directly
+- `soltrace-tahu` (`load_onchain_idls` in utils.rs): todo
+- `soltrace-dq3b` (`spawn_idl_subscription_task` / `idl_subscription.rs`): todo
+
+Steps (c), (e), (f), (g) in the bean body all reference code that hasn't been written yet. Re-dispatch when Epic 1 + Epic 2 land.
