@@ -1,5 +1,5 @@
 use crate::{
-    db::{event_id_to_hex, generate_event_id, DatabaseBackend, EventRecord},
+    db::{generate_event_id, DatabaseBackend, EventRecord},
     error::{Result, SoltraceError},
     types::{DecodedEvent, RawEvent, Slot},
 };
@@ -43,13 +43,14 @@ impl MongoDbBackend {
     pub async fn new(database_url: &str) -> Result<Self> {
         tracing::info!("Connecting to MongoDB database");
 
-        // Parse URL to extract database name
-        let parsed = url::Url::parse(database_url)
-            .map_err(|e| SoltraceError::Database(format!("Invalid MongoDB URL: {}", e)))?;
-
-        let db_name = parsed
-            .path_segments()
-            .and_then(|mut s| s.next())
+        // Extract db name from the URL path (after host:port, before query).
+        // mongodb://host:port/dbname?params → "dbname"; bare host → "soltrace".
+        let db_name = database_url
+            .split("://")
+            .nth(1)
+            .and_then(|r| r.split_once('/'))
+            .map(|(_, path)| path)
+            .and_then(|p| p.split('?').next())
             .filter(|s| !s.is_empty())
             .unwrap_or("soltrace");
 
@@ -102,7 +103,7 @@ impl DatabaseBackend for MongoDbBackend {
 
     async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
         let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
-        let event_id = event_id_to_hex(&id_bytes);
+        let event_id = hex::encode(&id_bytes);
 
         let data_doc = bson::to_document(&event.data).map_err(|e| {
             SoltraceError::Database(format!("Failed to convert event data to BSON: {}", e))

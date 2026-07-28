@@ -9,8 +9,8 @@ use solana_client::rpc_config::RpcTransactionConfig;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    load_idls, process_transaction, retry_with_rate_limit, Database, EventDecoder, IdlParser,
-    ProgramPrefixConfig,
+    create_backend, load_idls, process_transaction, retry_with_rate_limit, Database,
+    EventDecoder, IdlParser, ProgramPrefixConfig,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -134,7 +134,7 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
 
     // Initialize database
-    let db = Arc::new(Database::new(&cli.db_url).await?);
+    let db = create_backend(&cli.db_url).await?;
     info!("Database connected: {}", cli.db_url);
 
     // Initialize RPC client
@@ -277,7 +277,7 @@ async fn process_signatures_concurrent(
     signatures: Vec<String>,
     program_id_str: String,
     event_decoder: Arc<EventDecoder>,
-    db: Arc<Database>,
+    db: Database,
     processed_signatures: &mut HashSet<String>,
     concurrency: usize,
     max_retries: u32,

@@ -24,13 +24,4 @@ pub enum SoltraceError {
 
     #[error("Invalid IDL format: {0}")]
     InvalidIdl(String),
-
-    #[error("Event not found in IDL: {0}")]
-    EventNotFound(String),
-
-    #[error("Discriminator mismatch")]
-    DiscriminatorMismatch,
-
-    #[error("Solana client error: {0}")]
-    SolanaClient(String),
 }

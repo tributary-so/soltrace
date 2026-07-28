@@ -13,9 +13,9 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    cpi_dedup_index, decode_cpi_events, load_idls, process_transaction, retry_with_rate_limit,
-    types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, EventQueue, IdlParser,
-    ProgramPrefixConfig, QueueEvent,
+    cpi_dedup_index, create_backend, decode_cpi_events, load_idls, process_transaction,
+    retry_with_rate_limit, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder,
+    EventQueue, IdlParser, ProgramPrefixConfig, QueueEvent,
 };
 #[cfg(feature = "kafka")]
 use soltrace_core::{KafkaConfig, KafkaProducer};
@@ -158,7 +158,7 @@ async fn main() -> Result<()> {
 async fn init_db(db_url: &str) -> Result<()> {
     info!("Initializing database...");
 
-    let _db = Database::new(db_url).await?;
+    let _db = create_backend(db_url).await?;
     info!("Database initialized successfully at: {}", db_url);
 
     Ok(())
@@ -217,7 +217,7 @@ async fn run_indexer(
     };
 
     // Initialize database
-    let db = Arc::new(Database::new(&db_url).await?);
+    let db = create_backend(&db_url).await?;
     info!("Database connected: {}", db_url);
 
     // Load IDLs first to extract program IDs
@@ -321,7 +321,7 @@ async fn gap_backfill(
     rpc_client: &Arc<RpcClient>,
     program_ids: &[String],
     event_decoder: &Arc<EventDecoder>,
-    db: &Arc<Database>,
+    db: &Database,
     _kafka_producer: Option<&Arc<dyn EventQueue>>,
     commitment: &str,
     max_retries: u32,
@@ -486,7 +486,7 @@ async fn run_websocket_loop(
     ws_url: &str,
     program_ids: &[Pubkey],
     event_decoder: Arc<EventDecoder>,
-    db: Arc<Database>,
+    db: Database,
     kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     reconnect_delay: u64,
@@ -559,7 +559,7 @@ async fn websocket_handler(
     program_ids: &[Pubkey],
     program_ids_str: &[String],
     event_decoder: Arc<EventDecoder>,
-    db: Arc<Database>,
+    db: Database,
     kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     ping_interval: u64,
