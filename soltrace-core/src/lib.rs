@@ -14,6 +14,9 @@ pub use error::{Result, SoltraceError};
 pub use event::EventDecoder;
 pub use idl::IdlParser;
 pub use idl_event::IdlEventDecoder;
+// Re-exported so binaries can build the shared Arc<ArcSwap<IdlParser>> handed to
+// EventDecoder (and, later, the live subscription task) without a direct arc-swap dep.
+pub use arc_swap::ArcSwap;
 pub use onchain_idl::{
     decode_metadata_account, derive_canonical_idl_pda, fetch_canonical_idl, PROGRAM_METADATA_ID,
 };

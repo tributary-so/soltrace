@@ -257,7 +257,10 @@ async fn run_indexer(
         .map_err(|e| anyhow::anyhow!("Failed to parse program IDs: {}", e))?;
 
     // Create event decoder
-    let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
+    let event_decoder = Arc::new(EventDecoder::new(
+        Arc::new(soltrace_core::ArcSwap::from_pointee(idl_parser)),
+        prefix_config,
+    ));
 
     // Initialize RPC client for gap backfill
     let rpc_client = Arc::new(RpcClient::new(rpc_url.clone()));

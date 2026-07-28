@@ -610,7 +610,7 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(swap_idl(&program_id), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
 
         // <disc(8)><borsh u64 = 42>
         let disc = IdlParser::calculate_discriminator("Swap");
@@ -633,7 +633,7 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(swap_idl(&program_id), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
 
         // Swap discriminator matched, but borsh payload truncated (u64 needs 8,
         // give 2) -> IdlEventDecoder errors -> hex fallback must fire, not crash.
@@ -666,7 +666,7 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(swap_idl(&program_id), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
 
         let disc = IdlParser::calculate_discriminator("Swap");
         let mut payload = disc.to_vec();
@@ -746,7 +746,7 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(swap_idl(&program_id), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
 
         let disc = IdlParser::calculate_discriminator("Swap");
         let mut payload = disc.to_vec();
@@ -770,7 +770,7 @@ mod tests {
             .parse()
             .unwrap();
         // Decoder with NO IDL loaded for `unknown`.
-        let decoder = EventDecoder::new(IdlParser::new(), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(IdlParser::new())), ProgramPrefixConfig::new());
 
         let disc = IdlParser::calculate_discriminator("Swap");
         let mut payload = disc.to_vec();

@@ -131,7 +131,10 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     }
 
     // Create event decoder
-    let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
+    let event_decoder = Arc::new(EventDecoder::new(
+        Arc::new(soltrace_core::ArcSwap::from_pointee(idl_parser)),
+        prefix_config,
+    ));
 
     // Initialize database
     let db = create_backend(&cli.db_url).await?;
