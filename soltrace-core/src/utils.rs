@@ -1,6 +1,7 @@
 use crate::{
-    db::Database, event::EventDecoder, idl::IdlParser, types::CpiEvent, types::DecodedEvent,
-    types::InnerInstructionInfo, types::RawEvent,
+    db::Database, error::Result as CoreResult, event::EventDecoder, idl::IdlParser,
+    onchain_idl::fetch_canonical_idl, types::CpiEvent, types::DecodedEvent, types::InnerInstructionInfo,
+    types::ParsedIdl, types::RawEvent,
 };
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -48,6 +49,35 @@ pub async fn load_idls(idl_parser: &mut IdlParser, idl_dir: &str) -> Result<()> 
     }
 
     Ok(())
+}
+
+/// Fetch on-chain IDLs for `programs` via the program-metadata canonical PDA.
+///
+/// One-shot startup call: warn-and-continue per program (mirrors `load_idls`).
+/// Sync because `fetch_canonical_idl` is a blocking RPC — no `.await` to hide.
+pub fn load_onchain_idls(
+    parser: &mut IdlParser,
+    rpc: &solana_rpc_client::rpc_client::RpcClient,
+    programs: &[Pubkey],
+) {
+    load_onchain_idls_with(parser, programs, |p| fetch_canonical_idl(rpc, p));
+}
+
+/// Inner loop factored out so tests can inject a fake fetcher without an RPC.
+fn load_onchain_idls_with<F>(parser: &mut IdlParser, programs: &[Pubkey], mut fetch: F)
+where
+    F: FnMut(&Pubkey) -> CoreResult<Option<ParsedIdl>>,
+{
+    for program in programs {
+        match fetch(program) {
+            Ok(Some(idl)) => {
+                info!(program = %program, "fetched on-chain IDL");
+                parser.insert_or_replace(idl);
+            }
+            Ok(None) => warn!(program = %program, "no canonical Direct on-chain IDL"),
+            Err(e) => warn!(program = %program, error = %e, "failed to fetch on-chain IDL"),
+        }
+    }
 }
 
 /// Process a single transaction and extract events
@@ -782,5 +812,103 @@ mod tests {
             decode_cpi_events(&tx, "sig", &decoder).is_empty(),
             "unknown-discriminator CPI event must be skipped, not crash"
         );
+    }
+
+    // --- load_onchain_idls_with: warn-and-continue injection tests ---
+
+    use crate::types::ParsedIdl;
+
+    fn make_idl(address: &str) -> ParsedIdl {
+        serde_json::from_str(&format!(
+            r#"{{"name":"T","events":[],"address":"{}"}}"#,
+            address
+        ))
+        .unwrap()
+    }
+
+    fn pk(s: &str) -> Pubkey {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn test_load_onchain_idls_inserts_ok_some() {
+        let mut parser = IdlParser::new();
+        let programs = vec![
+            pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+            pk("11111111111111111111111111111111"),
+        ];
+        load_onchain_idls_with(&mut parser, &programs, |p| {
+            Ok(Some(make_idl(&p.to_string())))
+        });
+
+        assert_eq!(parser.get_idls().len(), 2, "both IDLs should land");
+        assert!(parser
+            .get_idls()
+            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
+    }
+
+    #[test]
+    fn test_load_onchain_idls_skips_ok_none() {
+        let mut parser = IdlParser::new();
+        let programs = vec![pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")];
+        load_onchain_idls_with(&mut parser, &programs, |_| Ok(None));
+
+        assert!(parser.get_idls().is_empty(), "Ok(None) must not insert");
+    }
+
+    #[test]
+    fn test_load_onchain_idls_skips_err() {
+        let mut parser = IdlParser::new();
+        let programs = vec![pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")];
+        load_onchain_idls_with(&mut parser, &programs, |_| {
+            Err(crate::error::SoltraceError::IdlParse("boom".into()))
+        });
+
+        assert!(
+            parser.get_idls().is_empty(),
+            "Err must not insert and must not propagate"
+        );
+    }
+
+    #[test]
+    fn test_load_onchain_idls_mixed_results() {
+        let mut parser = IdlParser::new();
+        let good = pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        let none = pk("11111111111111111111111111111111");
+        let errd = pk("SysvarRent111111111111111111111111111111111");
+        let programs = vec![good, none, errd];
+        load_onchain_idls_with(&mut parser, &programs, |p| {
+            if p == &good {
+                Ok(Some(make_idl(&p.to_string())))
+            } else if p == &none {
+                Ok(None)
+            } else {
+                Err(crate::error::SoltraceError::IdlParse("bad".into()))
+            }
+        });
+
+        assert_eq!(parser.get_idls().len(), 1, "only the Ok(Some) entry lands");
+        assert!(parser
+            .get_idls()
+            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
+    }
+
+    #[test]
+    fn test_load_onchain_idls_empty_programs_is_noop() {
+        let mut parser = IdlParser::new();
+        load_onchain_idls_with(&mut parser, &[], |_| Ok(Some(make_idl("X"))));
+        assert!(parser.get_idls().is_empty());
+    }
+
+    #[test]
+    fn test_load_onchain_idls_overwrites_same_address() {
+        let mut parser = IdlParser::new();
+        let addr = pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        parser.insert_or_replace(make_idl(&addr.to_string()));
+        load_onchain_idls_with(&mut parser, std::slice::from_ref(&addr), |p| {
+            Ok(Some(make_idl(&p.to_string())))
+        });
+
+        assert_eq!(parser.get_idls().len(), 1, "replace, not duplicate");
     }
 }
