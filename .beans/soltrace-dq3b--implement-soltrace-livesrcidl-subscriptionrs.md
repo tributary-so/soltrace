@@ -5,7 +5,7 @@ status: todo
 type: task
 priority: normal
 created_at: 2026-07-28T08:31:44Z
-updated_at: 2026-07-28T11:45:02Z
+updated_at: 2026-07-28T11:52:13Z
 parent: soltrace-sfg2
 ---
 
@@ -68,3 +68,5 @@ Re-verified 2026-07-28T(current): Blocker still holds. `soltrace-ipo0` is still 
 `hordr blocked` is not a registered command in hordr 0.1.0 (commands: cleanup, done, finish, help, prime, run). No programmatic lane-release available. Bean remains `todo`. Re-dispatch once `soltrace-ipo0` lands its primitives (`onchain_idl.rs`, `insert_or_replace`/`remove`, arc-swap `EventDecoder` field).
 
 Re-verified 2026-07-28T11:41Z: blocker still holds. soltrace-ipo0 + all 6 children still todo. Primitives still absent (onchain_idl.rs missing; no insert_or_replace/remove; EventDecoder.idl_parser still IdlParser not Arc<ArcSwap>). hordr blocked not a command in 0.1.0. Bean stays todo.
+
+Re-verified 2026-07-28T11:51Z: blocker holds. soltrace-ipo0 (epic) + all 6 children still todo. Primitives absent (onchain_idl.rs missing; no insert_or_replace/remove; EventDecoder.idl_parser still IdlParser). hordr blocked not a command (0.1.0). Bean stays todo.
