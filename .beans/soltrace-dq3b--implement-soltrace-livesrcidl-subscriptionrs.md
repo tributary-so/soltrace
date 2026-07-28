@@ -5,7 +5,7 @@ status: todo
 type: task
 priority: normal
 created_at: 2026-07-28T08:31:44Z
-updated_at: 2026-07-28T11:25:03Z
+updated_at: 2026-07-28T11:35:03Z
 parent: soltrace-sfg2
 ---
 
@@ -57,4 +57,4 @@ Verified missing in worktree:
 
 This task consumes all three as its public API. Building them here would duplicate Epic 1's lane (`soltrace-ipo0` branch) and create merge conflicts.
 
-`hordr blocked` is not a registered command in this hordr version (0.1.0); no programmatic lane-release available. Bean left at `todo`. Re-dispatch once `soltrace-ipo0` lands its primitives.
+`hordr blocked` is not a registered command in this hordr version (0.1.0); no programmatic lane-release available. Bean left at `todo`. Re-dispatch once `soltrace-ipo0` lands its primitives.\n\nRe-verified 2026-07-28T11:30Z: `soltrace-ipo0` still `todo`; all three primitives still absent in worktree (onchain_idl.rs missing, no insert_or_replace/remove, EventDecoder.idl_parser still IdlParser). Blocker holds. `hordr blocked` still not a registered command (hordr 0.1.0).
