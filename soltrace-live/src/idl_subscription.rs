@@ -89,7 +89,6 @@ fn handle_account_notification(
 /// reconnect, re-subscribes to all program PDAs. When all PDAs become immutable
 /// or are closed, the task exits cleanly. Task errors log and return without
 /// taking down the indexer.
-#[allow(dead_code)] // wired by the binary-integration task
 pub fn spawn_idl_subscription_task(
     programs: Vec<Pubkey>,
     ws_url: String,

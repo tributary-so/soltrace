@@ -76,6 +76,11 @@ enum Commands {
         #[arg(short, long, default_value = "./idls", env("IDL_DIR"))]
         idl_dir: String,
 
+        /// On-chain program IDs to fetch Anchor IDLs from via program-metadata
+        /// (comma-separated base58, e.g. "Prog1,Prog2")
+        #[arg(long, env("ONCHAIN_PROGRAMS"), default_value = "")]
+        onchain_programs: String,
+
         /// Log commitment level (processed, confirmed, finalized)
         #[arg(short, long, default_value = "confirmed", env("COMMITMENT"))]
         commitment: String,
@@ -128,6 +133,7 @@ async fn main() -> Result<()> {
             program_prefixes,
             db_url,
             idl_dir,
+            onchain_programs,
             commitment,
             reconnect_delay,
             max_reconnects,
@@ -142,6 +148,7 @@ async fn main() -> Result<()> {
                 program_prefixes,
                 db_url,
                 idl_dir,
+                onchain_programs,
                 commitment,
                 reconnect_delay,
                 max_reconnects,
@@ -172,6 +179,7 @@ async fn run_indexer(
     program_prefixes: String,
     db_url: String,
     idl_dir: String,
+    onchain_programs: String,
     commitment: String,
     reconnect_delay: u64,
     max_reconnects: u32,
@@ -222,12 +230,28 @@ async fn run_indexer(
     let db = create_backend(&db_url).await?;
     info!("Database connected: {}", db_url);
 
-    // Load IDLs first to extract program IDs
+    // (a) Load file IDLs first (Decision 1: file primary)
     let mut idl_parser = IdlParser::new();
     load_idls(&mut idl_parser, &idl_dir).await?;
 
+    // RPC client constructed early — needed for the on-chain IDL fetch below.
+    let rpc_client = Arc::new(RpcClient::new(rpc_url.clone()));
+
+    // (b) One-shot on-chain IDL fetch for explicitly-listed programs. File
+    // precedence is preserved inside load_onchain_idls (it skips programs
+    // already loaded from disk); per-program failures warn-and-continue.
+    let onchain_programs = parse_onchain_programs(&onchain_programs)?;
+    if !onchain_programs.is_empty() {
+        info!(
+            "Fetching on-chain IDL(s) for {} program(s)...",
+            onchain_programs.len()
+        );
+        soltrace_core::load_onchain_idls(&mut idl_parser, &rpc_client, &onchain_programs);
+    }
+
+    // (c) Prefix config from all loaded IDLs (file + on-chain)
     let loaded_idls = idl_parser.get_idls();
-    info!("Loaded {} IDL(s) from {}", loaded_idls.len(), idl_dir);
+    info!("Loaded {} IDL(s) total", loaded_idls.len());
     for (addr, idl) in loaded_idls {
         info!("  - {}: {} events", addr, idl.events.len());
     }
@@ -245,7 +269,18 @@ async fn run_indexer(
         );
     }
 
-    let program_ids = prefix_config.get_program_ids();
+    let mut program_ids = prefix_config.get_program_ids();
+
+    // Chicken-and-egg (HANDOFF §3): on-chain programs must be in the logs
+    // filter even before their IDL arrives via accountSubscribe push — events
+    // hit the existing unknown-discriminator debug-skip until the IDL lands.
+    for pk in &onchain_programs {
+        let s = pk.to_string();
+        if !program_ids.contains(&s) {
+            program_ids.push(s);
+        }
+    }
+
     if program_ids.is_empty() {
         error!("No IDLs found in directory. Use --idl-dir <path>");
         return Ok(());
@@ -258,14 +293,25 @@ async fn run_indexer(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!("Failed to parse program IDs: {}", e))?;
 
-    // Create event decoder
-    let event_decoder = Arc::new(EventDecoder::new(
-        Arc::new(soltrace_core::ArcSwap::from_pointee(idl_parser)),
-        prefix_config,
-    ));
+    // (d) Wrap parser in ArcSwap for hot-reload (live subscription swaps it)
+    let shared_parser = Arc::new(soltrace_core::ArcSwap::from_pointee(idl_parser));
 
-    // Initialize RPC client for gap backfill
-    let rpc_client = Arc::new(RpcClient::new(rpc_url.clone()));
+    // (e) Event decoder reads the shared parser on every decode
+    let event_decoder = Arc::new(EventDecoder::new(shared_parser.clone(), prefix_config));
+
+    // (f) Live IDL subscription task (live only): accountSubscribe pushes
+    // hot-swap the parser; reconnect/immutable/close are handled in the task.
+    // No programs → no-op; the logs loop below runs unchanged.
+    let _idl_sub_task = if !onchain_programs.is_empty() {
+        Some(idl_subscription::spawn_idl_subscription_task(
+            onchain_programs,
+            ws_url.clone(),
+            parse_commitment(&commitment)?,
+            shared_parser.clone(),
+        ))
+    } else {
+        None
+    };
 
     // Spawn gap backfill concurrently with WebSocket
     let backfill_handle = if !no_gap_backfill {
@@ -692,6 +738,21 @@ fn parse_commitment(commitment: &str) -> Result<CommitmentConfig> {
     }
 }
 
+/// Parse a comma-separated list of base58 program IDs into `Pubkey`s.
+///
+/// Empty/whitespace entries are dropped. Hard-errors on the first malformed
+/// entry (Decision 11: operator typo must be loud, not silently dropped).
+fn parse_onchain_programs(csv: &str) -> Result<Vec<Pubkey>> {
+    csv.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<Pubkey>()
+                .map_err(|e| anyhow::anyhow!("Invalid --onchain-programs entry '{s}': {e}"))
+        })
+        .collect()
+}
+
 /// Process a logs message from PubsubClient
 async fn process_logs_message(
     message: solana_client::rpc_response::RpcLogsResponse,
@@ -898,5 +959,65 @@ mod tests {
         assert!(parse_commitment("processed").is_ok());
         assert!(parse_commitment("finalized").is_ok());
         assert!(parse_commitment("invalid").is_err());
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_valid() {
+        let csv = "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        let parsed = parse_onchain_programs(csv).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].to_string(),
+            "11111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_empty_is_noop() {
+        assert!(parse_onchain_programs("").unwrap().is_empty());
+        assert!(parse_onchain_programs(" , , ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_invalid_hard_errors() {
+        assert!(parse_onchain_programs("NOTABASE58").is_err());
+        // First bad entry short-circuits even when preceded by a valid one.
+        assert!(parse_onchain_programs(
+            "11111111111111111111111111111111,BAD!!"
+        )
+        .is_err());
+    }
+
+    // --- Regression (soltrace-b4md): --onchain-programs is OPTIONAL with an
+    // empty default, so operators who don't pass it see zero behavioral change.
+    // These lock that contract at the CLI surface (deterministic, no network).
+
+    #[test]
+    fn test_cli_onchain_programs_defaults_empty_when_absent() {
+        let cli = Cli::parse_from(["soltrace-live", "run", "--program-prefixes", ""]);
+        match cli.command {
+            Commands::Run { ref onchain_programs, .. } => {
+                assert_eq!(onchain_programs, "", "absent flag must default to empty");
+            }
+            _ => panic!("expected Run subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_cli_onchain_programs_accepted_when_present() {
+        let cli = Cli::parse_from([
+            "soltrace-live",
+            "run",
+            "--program-prefixes",
+            "",
+            "--onchain-programs",
+            "11111111111111111111111111111111",
+        ]);
+        match cli.command {
+            Commands::Run { ref onchain_programs, .. } => {
+                assert_eq!(onchain_programs, "11111111111111111111111111111111");
+            }
+            _ => panic!("expected Run subcommand"),
+        }
     }
 }

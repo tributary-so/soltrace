@@ -103,7 +103,7 @@ impl DatabaseBackend for MongoDbBackend {
 
     async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
         let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
-        let event_id = hex::encode(&id_bytes);
+        let event_id = hex::encode(id_bytes);
 
         let data_doc = bson::to_document(&event.data).map_err(|e| {
             SoltraceError::Database(format!("Failed to convert event data to BSON: {}", e))
