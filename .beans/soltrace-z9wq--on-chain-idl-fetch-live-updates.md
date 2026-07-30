@@ -1,10 +1,11 @@
 ---
 # soltrace-z9wq
 title: On-chain IDL fetch & live updates
-status: todo
+status: completed
 type: milestone
+priority: normal
 created_at: 2026-07-28T08:30:16Z
-updated_at: 2026-07-28T08:30:16Z
+updated_at: 2026-07-30T14:03:26Z
 ---
 
 # On-chain IDL fetch & live updates
