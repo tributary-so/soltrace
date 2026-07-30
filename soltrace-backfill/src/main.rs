@@ -453,4 +453,25 @@ mod tests {
         )
         .is_err());
     }
+
+    // --- Regression (soltrace-b4md): --onchain-programs is OPTIONAL with an
+    // empty default → operators who don't pass it see zero behavioral change.
+
+    #[test]
+    fn test_cli_onchain_programs_defaults_empty_when_absent() {
+        let cli = Cli::parse_from(["soltrace-backfill", "--program-prefixes", ""]);
+        assert_eq!(cli.onchain_programs, "", "absent flag must default to empty");
+    }
+
+    #[test]
+    fn test_cli_onchain_programs_accepted_when_present() {
+        let cli = Cli::parse_from([
+            "soltrace-backfill",
+            "--program-prefixes",
+            "",
+            "--onchain-programs",
+            "11111111111111111111111111111111",
+        ]);
+        assert_eq!(cli.onchain_programs, "11111111111111111111111111111111");
+    }
 }

@@ -987,4 +987,37 @@ mod tests {
         )
         .is_err());
     }
+
+    // --- Regression (soltrace-b4md): --onchain-programs is OPTIONAL with an
+    // empty default, so operators who don't pass it see zero behavioral change.
+    // These lock that contract at the CLI surface (deterministic, no network).
+
+    #[test]
+    fn test_cli_onchain_programs_defaults_empty_when_absent() {
+        let cli = Cli::parse_from(["soltrace-live", "run", "--program-prefixes", ""]);
+        match cli.command {
+            Commands::Run { ref onchain_programs, .. } => {
+                assert_eq!(onchain_programs, "", "absent flag must default to empty");
+            }
+            _ => panic!("expected Run subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_cli_onchain_programs_accepted_when_present() {
+        let cli = Cli::parse_from([
+            "soltrace-live",
+            "run",
+            "--program-prefixes",
+            "",
+            "--onchain-programs",
+            "11111111111111111111111111111111",
+        ]);
+        match cli.command {
+            Commands::Run { ref onchain_programs, .. } => {
+                assert_eq!(onchain_programs, "11111111111111111111111111111111");
+            }
+            _ => panic!("expected Run subcommand"),
+        }
+    }
 }
