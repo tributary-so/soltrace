@@ -1,9 +1,9 @@
 # Soltrace
 
-A protocol-agnostic Solana event indexer. Soltrace reads Anchor IDLs supplied by
-the operator, decodes `emit!` and `emit_cpi!` events from those programs, and
-stores each decoded occurrence as a row keyed by where in the transaction it
-came from. Soltrace itself knows nothing about any specific Solana program.
+A protocol-agnostic Solana event indexer. The operator installs Anchor IDLs;
+soltrace decodes `emit!` and `emit_cpi!` events from those programs and stores
+each decoded occurrence as a row keyed by where in the transaction it came
+from. Soltrace itself knows nothing about any specific Solana program.
 
 ## Language
 
@@ -11,13 +11,12 @@ came from. Soltrace itself knows nothing about any specific Solana program.
 
 **EventEmission**:
 An act of an Anchor program emitting an event on-chain. One EventEmission
-becomes at most one Event Row. Distinguish from the bytes, the decoded value,
-and the row.
+becomes at most one Event Row.
 _Avoid_: event, anchor event, log entry
 
 **EventPayload**:
-The bytes of one EventEmission after any wrapper has been stripped:
-`<event-disc(8)><borsh-encoded fields>`. The unit `IdlEventDecoder` consumes.
+The bytes of one EventEmission after any wrapper has been stripped. The unit
+`IdlEventDecoder` consumes.
 _Avoid_: event data, raw bytes, payload
 
 **DecodedEvent**:
@@ -39,16 +38,17 @@ _Avoid_: event, record, entry
 
 **emit! path**:
 Anchor's `emit!` macro. Events surface as `Program data: <base64>` log lines
-in `meta.log_messages`. Extracted by log-scraping.
+in `meta.logMessages`. Extracted by log-scraping.
 
 **emit_cpi! path**:
 Anchor's `emit_cpi!` macro. Events surface as self-CPIs to the program's
 `__event_authority` PDA inside `meta.innerInstructions`. Extracted by
-inner-instruction inspection. Bytes are wrapped: `[event_cpi disc(8)][EventPayload]`.
+inner-instruction inspection.
 
 **event_cpi wrapper discriminator**:
-The fixed 8-byte prefix `0x1d9acb512ea545e4` on every `emit_cpi!` instruction.
-Distinct from the inner event's own discriminator (sha256("event:<name>")[..8]).
+A fixed 8-byte prefix on every `emit_cpi!` instruction, stripped before the
+event's own discriminator is looked up. A different value from an event's own
+discriminator despite the similar name.
 
 ### Solana primitives (as used here)
 
@@ -66,8 +66,8 @@ A CPI where the calling program invokes a PDA of itself. `emit_cpi!` is a
 self-CPI to `["__event_authority"]`.
 
 **Signature**:
-A Solana transaction's base58 signature. Used as the transaction-identity
-component of the dedup key. A signature can carry many Event Rows.
+A Solana transaction's base58 signature. The transaction-identity component of
+the dedup key. One signature can carry many Event Rows.
 
 **Slot**:
 Solana slot number in which the transaction was confirmed.
@@ -79,14 +79,60 @@ indexer subscribes and fetches. Affects reorg exposure and finality.
 ### Identity & naming
 
 **Discriminator**:
-The 8-byte Anchor event discriminator `sha256("event:<name>")[..8]`. Used to
-look up an EventPayload's IDL definition. (See also: event_cpi wrapper
-discriminator — a different 8-byte value with a similar name.)
+Anchor's 8-byte event type tag. Used to look up an EventPayload's IDL
+definition. (See also: event_cpi wrapper discriminator — a different 8-byte
+value with a similar name.)
 
 **Prefix**:
 The per-program string prepended to event names when storing
-(`<prefix>_<EventName>`). Configured by the operator via `PROGRAM_PREFIXES`;
-defaults to `default` for any program not mapped.
+(`<prefix>_<EventName>`). Configured by the operator; defaults to `default`
+for any program not mapped.
+
+### IDL sources
+
+**IDL**:
+An Anchor Interface Definition Language JSON document describing a program's
+events and types. Soltrace keys an IDL by its top-level `address` field
+(filename is free-form).
+
+**IDL Directory**:
+The folder (default `./idls`) from which every `*.json` IDL is read. Loaded
+exactly once at process startup; changes during a run are ignored until
+restart.
+
+**File IDL**:
+An IDL the operator places in the IDL Directory. Always wins over any
+on-chain IDL for the same program.
+_Avoid_: local IDL, disk IDL
+
+**On-chain IDL**:
+An IDL fetched live from Solana rather than read from disk. Either a
+program-metadata IDL or a classic Anchor IDL — the two publication standards
+soltrace supports.
+_Avoid_: remote IDL
+
+**program-metadata IDL**:
+An IDL published via the Solana program-metadata program — the modern Anchor
+(≥0.31) standard. Stored in a Metadata account whose data source is Direct;
+the only on-chain form that supports IDL hot-swap.
+_Avoid_: new IDL, SPL IDL
+
+**classic Anchor IDL**:
+An IDL published by Anchor's own `anchor idl init` mechanism
+(pre-program-metadata). Stored compressed in an account owned by the indexed
+program itself. Not to be confused with a legacy IDL.
+_Avoid_: legacy IDL (reserved for the pre-0.30 shape), old IDL
+
+**legacy IDL**:
+The pre-0.30 IDL _JSON shape_ — a structurally different document from the
+current spec. Distinct from a classic Anchor IDL (a publication mechanism, not
+a shape). Decoding legacy-shape IDLs is deferred and out of scope.
+
+**IDL hot-swap**:
+The live-indexer mechanism that replaces the in-memory parser when a
+program-metadata IDL account is updated on-chain, without a restart. Applies
+to program-metadata IDLs only.
+_Avoid_: reload, refresh
 
 ### Ingestion modes
 
@@ -96,8 +142,9 @@ notification, fetches the full transaction to decode `emit_cpi!` events from
 inner instructions.
 
 **Backfill**:
-The historical mode (`soltrace-backfill`). Paginates `get_signatures_for_address`
-backwards from the chain tip, fetches each transaction, processes it.
+The historical mode (`soltrace-backfill`). Paginates
+`get_signatures_for_address` backwards from the chain tip, fetches each
+transaction, processes it.
 _Avoid_: catch-up, reprocess
 
 **Catch-up**:
@@ -115,15 +162,3 @@ idempotent — duplicate Event Rows are silently dropped on the dedup key.
 The person who runs soltrace. Owns the IDLs, the RPC endpoints, and the
 program-to-prefix mapping. Soltrace never ships IDLs; the operator installs
 them. Distinguish from any downstream consumer of the stored Event Rows.
-
-### Artifacts
-
-**IDL**:
-An Anchor Interface Definition Language JSON file describing a program's events
-and types. Loaded from the IDL Directory. Filename is free-form; soltrace keys
-by the IDL's top-level `address` field.
-
-**IDL Directory**:
-The folder (default `./idls`, override via `IDL_DIR`) from which every `*.json`
-IDL is loaded. Loaded exactly once at process startup; changes during a run
-are ignored until restart.
