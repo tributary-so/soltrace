@@ -87,6 +87,28 @@ where
     }
 }
 
+/// Drop programs that have no loaded IDL from the indexing set.
+///
+/// Without an IDL every event from a program hits the unknown-discriminator
+/// debug-skip, so fetching its signatures/transactions is wasted RPC budget.
+/// Returns the dropped program IDs so the caller can warn (operator likely
+/// typo'd the id or forgot to install its IDL).
+///
+/// Live's on-chain-IDL programs are pending their IDL via `accountSubscribe`
+/// and are re-added to the indexing set by the caller *after* this filter, so
+/// their temporary IDL-less state here is expected, not a drop condition.
+pub fn retain_indexable(
+    program_ids: &mut Vec<String>,
+    loaded: &std::collections::HashMap<String, ParsedIdl>,
+) -> Vec<String> {
+    let original = std::mem::take(program_ids);
+    let (keep, dropped) = original
+        .into_iter()
+        .partition(|p| loaded.contains_key(p));
+    *program_ids = keep;
+    dropped
+}
+
 /// Process a single transaction and extract events
 pub async fn process_transaction(
     transaction: EncodedConfirmedTransactionWithStatusMeta,
@@ -594,6 +616,23 @@ mod tests {
     // --- decode_cpi_events: route unwrapped bytes through IDL decoder ---
 
     use crate::{idl::IdlParser, types::ProgramPrefixConfig};
+
+    // --- retain_indexable: skip programs with no IDL ---
+
+    #[test]
+    fn test_retain_indexable_drops_idl_less_programs() {
+        let with_idl = Pubkey::new_unique();
+        let parser = swap_idl(&with_idl);
+        let loaded = parser.get_idls();
+
+        let orphan = Pubkey::new_unique().to_string();
+        let mut program_ids = vec![with_idl.to_string(), orphan.clone()];
+
+        let dropped = retain_indexable(&mut program_ids, loaded);
+
+        assert_eq!(program_ids, vec![with_idl.to_string()], "IDL-backed program kept");
+        assert_eq!(dropped, vec![orphan], "IDL-less program dropped for caller to warn");
+    }
 
     /// Minimal IDL for `program_id` with one event `Swap { amount: u64 }`.
     fn swap_idl(program_id: &Pubkey) -> IdlParser {

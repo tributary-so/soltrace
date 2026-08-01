@@ -139,7 +139,18 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         );
     }
 
-    let program_ids = prefix_config.get_program_ids();
+    let mut program_ids = prefix_config.get_program_ids();
+    // Drop programs with no IDL — without one, every event decodes to the
+    // unknown-discriminator debug-skip, so fetching their signatures/txs is
+    // wasted RPC. On-chain fetch failures land here too (backfill is
+    // point-in-time, so a failed fetch means no IDL, ever).
+    let dropped = soltrace_core::retain_indexable(&mut program_ids, loaded_idls);
+    for pid in &dropped {
+        warn!(
+            "No IDL for program {}; skipping (install an IDL or drop it from --program-prefixes)",
+            pid
+        );
+    }
     if program_ids.is_empty() {
         error!("No IDLs found in directory. Use --idl-dir <path>");
         return Ok(());

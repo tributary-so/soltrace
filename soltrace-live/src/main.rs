@@ -271,6 +271,23 @@ async fn run_indexer(
 
     let mut program_ids = prefix_config.get_program_ids();
 
+    // Drop programs with no IDL — without one, every event decodes to the
+    // unknown-discriminator debug-skip, so subscribing to their logs and
+    // fetching their txs is wasted RPC. On-chain-IDL programs are excluded
+    // from the warning (and re-added just below) because their IDL is still
+    // pending via accountSubscribe.
+    let dropped = soltrace_core::retain_indexable(&mut program_ids, loaded_idls);
+    let onchain_str: std::collections::HashSet<String> =
+        onchain_programs.iter().map(|p| p.to_string()).collect();
+    for pid in &dropped {
+        if !onchain_str.contains(pid) {
+            warn!(
+                "No IDL for program {}; skipping (install an IDL, add it to --onchain-programs, or drop it from --program-prefixes)",
+                pid
+            );
+        }
+    }
+
     // Chicken-and-egg (HANDOFF §3): on-chain programs must be in the logs
     // filter even before their IDL arrives via accountSubscribe push — events
     // hit the existing unknown-discriminator debug-skip until the IDL lands.
