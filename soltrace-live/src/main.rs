@@ -709,8 +709,53 @@ async fn process_logs_message(
     let signature = &message.signature;
     let logs = &message.logs;
 
-    // Process logs for events
     let mut events_found = 0;
+
+    // RpcLogsResponse carries no slot. Fetch the full transaction once so both
+    // the emit! (log-scraped) and emit_cpi! (inner-instruction) paths share the
+    // real slot and block_time. maxSupportedTransactionVersion=0 expands ALT keys.
+    let sig = match signature.parse::<solana_sdk::signature::Signature>() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Failed to parse signature {}: {}", signature, e);
+            return Ok(events_found);
+        }
+    };
+
+    let tx_result = retry_with_rate_limit(
+        || {
+            let rpc = rpc_client.clone();
+            async move {
+                rpc.get_transaction_with_config(
+                    &sig,
+                    RpcTransactionConfig {
+                        encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                        commitment: Some(commitment_config),
+                        max_supported_transaction_version: Some(0),
+                    },
+                )
+            }
+        },
+        max_retries,
+    )
+    .await;
+
+    let transaction = match tx_result {
+        Ok(tx) => tx,
+        Err(e) => {
+            warn!(
+                "Failed to fetch tx {} for decode (emit! + emit_cpi!): {}",
+                signature, e
+            );
+            return Ok(events_found);
+        }
+    };
+
+    let slot = transaction.slot;
+    let timestamp = transaction
+        .block_time
+        .and_then(|bt| chrono::DateTime::from_timestamp(bt, 0))
+        .unwrap_or_else(Utc::now);
 
     for log in logs {
         for program_id in program_ids {
@@ -720,11 +765,11 @@ async fn process_logs_message(
                     Ok(decoded_event) => {
                         // Create raw event record
                         let raw_event = RawEvent {
-                            slot: 0, // Not provided in RpcLogsResponse
+                            slot,
                             signature: signature.clone(),
                             program_id: *program_id,
                             log: log.clone(),
-                            timestamp: Utc::now(),
+                            timestamp,
                         };
 
                         // Store event in database
@@ -772,52 +817,10 @@ async fn process_logs_message(
         }
     }
 
-    // emit_cpi! events live in inner instructions, NOT program logs. The WS
-    // log notification only carries the signature; fetch the full transaction
-    // (maxSupportedTransactionVersion=0 expands ALT keys) to access them.
-    //
-    // Decode failures fall back to hex (event.rs) and unknown-discriminator
-    // events are skipped — never crashes the indexer (see decode_cpi_events).
-    let sig = match signature.parse::<solana_sdk::signature::Signature>() {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("Failed to parse signature {}: {}", signature, e);
-            return Ok(events_found);
-        }
-    };
-
-    let tx_result = retry_with_rate_limit(
-        || {
-            let rpc = rpc_client.clone();
-            async move {
-                rpc.get_transaction_with_config(
-                    &sig,
-                    RpcTransactionConfig {
-                        encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
-                        commitment: Some(commitment_config),
-                        max_supported_transaction_version: Some(0),
-                    },
-                )
-            }
-        },
-        max_retries,
-    )
-    .await;
-
-    let transaction = match tx_result {
-        Ok(tx) => tx,
-        Err(e) => {
-            warn!("Failed to fetch tx {} for CPI decode: {}", signature, e);
-            return Ok(events_found);
-        }
-    };
-
-    let slot = transaction.slot;
-    let timestamp = transaction
-        .block_time
-        .and_then(|bt| chrono::DateTime::from_timestamp(bt, 0))
-        .unwrap_or_else(Utc::now);
-
+    // emit_cpi! events live in inner instructions, NOT program logs. The full
+    // transaction fetched above exposes them. Decode failures fall back to hex
+    // (event.rs); unknown-discriminator events are skipped — never crashes the
+    // indexer (see decode_cpi_events).
     for (cpi, decoded_event) in decode_cpi_events(&transaction, signature, event_decoder) {
         let raw_event = RawEvent {
             slot,
