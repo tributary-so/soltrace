@@ -18,7 +18,8 @@ pub use idl_event::IdlEventDecoder;
 // EventDecoder (and, later, the live subscription task) without a direct arc-swap dep.
 pub use arc_swap::ArcSwap;
 pub use onchain_idl::{
-    decode_metadata_account, derive_canonical_idl_pda, fetch_canonical_idl, PROGRAM_METADATA_ID,
+    decode_anchor_classic_account, decode_metadata_account, derive_anchor_classic_idl_pda,
+    derive_canonical_idl_pda, fetch_canonical_idl, fetch_onchain_idl, PROGRAM_METADATA_ID,
 };
 pub use queue::{EventQueue, QueueEvent};
 #[cfg(feature = "kafka")]

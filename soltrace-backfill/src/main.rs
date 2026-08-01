@@ -107,16 +107,33 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     // RPC client constructed early — needed for the on-chain IDL fetch below.
     let rpc_client = Arc::new(RpcClient::new(cli.rpc_url.clone()));
 
-    // (b) One-shot on-chain IDL fetch for explicitly-listed programs (backfill
-    // is point-in-time, so no subscription task). File precedence is preserved
-    // inside load_onchain_idls; per-program failures warn-and-continue.
+    // (b) Build the on-chain IDL candidate set (auto-discovery): every program
+    // named in --program-prefixes is probed on-chain (program-metadata then
+    // classic Anchor) unless it already has a file IDL; explicit
+    // --onchain-programs are added too. File precedence is preserved inside
+    // load_onchain_idls; per-program failures warn-and-continue.
+    let mut prefix_config = ProgramPrefixConfig::new();
+    if !cli.program_prefixes.is_empty() {
+        prefix_config.add_mappings_from_string(&cli.program_prefixes);
+    }
+    let mut candidates: Vec<Pubkey> = prefix_config
+        .get_program_ids()
+        .into_iter()
+        .map(|s| s.parse::<Pubkey>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("invalid program id in --program-prefixes: {e}"))?;
     let onchain_programs = parse_onchain_programs(&cli.onchain_programs)?;
-    if !onchain_programs.is_empty() {
+    for pk in &onchain_programs {
+        if !candidates.contains(pk) {
+            candidates.push(*pk);
+        }
+    }
+    if !candidates.is_empty() {
         info!(
             "Fetching on-chain IDL(s) for {} program(s)...",
-            onchain_programs.len()
+            candidates.len()
         );
-        soltrace_core::load_onchain_idls(&mut idl_parser, &rpc_client, &onchain_programs);
+        soltrace_core::load_onchain_idls(&mut idl_parser, &rpc_client, &candidates);
     }
 
     // (c) Prefix config from all loaded IDLs (file + on-chain)
@@ -125,19 +142,8 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     for (addr, idl) in loaded_idls {
         info!("  - {}: {} events", addr, idl.events.len());
     }
-
-    // Create program prefix configuration from CLI/env
-    let mut prefix_config = ProgramPrefixConfig::new();
-    // Load programs from IDLs with default prefix
+    // Add IDL-backed programs not named in --program-prefixes (default prefix).
     prefix_config.load_from_idls(loaded_idls);
-    // Apply custom prefix mappings from CLI/env
-    if !cli.program_prefixes.is_empty() {
-        prefix_config.add_mappings_from_string(&cli.program_prefixes);
-        info!(
-            "Applied {} custom program prefix mapping(s)",
-            cli.program_prefixes
-        );
-    }
 
     let mut program_ids = prefix_config.get_program_ids();
     // Drop programs with no IDL — without one, every event decodes to the

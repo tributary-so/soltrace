@@ -61,7 +61,7 @@ pub fn decode_metadata_account(
     Ok(Some(idl))
 }
 
-/// Fetch the canonical on-chain IDL for `program`.
+/// Fetch the canonical on-chain IDL for `program` (program-metadata standard).
 ///
 /// RPC failure (account absent, network error) maps to `Ok(None)` — no error
 /// propagation, per the startup warn-and-continue contract. A present account
@@ -75,6 +75,76 @@ pub fn fetch_canonical_idl(
         Ok(account) => decode_metadata_account(&account.data, program),
         Err(_) => Ok(None),
     }
+}
+
+/// Classic Anchor IDL account seed (pre-program-metadata publication).
+pub const ANCHOR_CLASSIC_IDL_SEED: &str = "anchor:idl";
+/// `[disc(8)][authority(32)][data_len(4)]` — header before the zlib payload.
+const ANCHOR_CLASSIC_HEADER: usize = 44;
+
+/// Derive the classic Anchor IDL account address for `program`.
+///
+/// Mirrors `IdlAccount::address` in `anchor-lang`: the program's own zero-seed
+/// PDA is the base, and `create_with_seed` with the literal `"anchor:idl"`
+/// gives a deterministic, signer-less address owned by the program itself.
+pub fn derive_anchor_classic_idl_pda(program: &Pubkey) -> Pubkey {
+    let program_signer = Pubkey::find_program_address(&[], program).0;
+    Pubkey::create_with_seed(&program_signer, ANCHOR_CLASSIC_IDL_SEED, program)
+        .expect("seed 'anchor:idl' is short and contains no NULs")
+}
+
+/// Decode a classic Anchor IDL account's raw bytes into a [`ParsedIdl`].
+///
+/// Wire layout (per `anchor` v0.30.1 `cli/src/lib.rs::fetch_idl`):
+/// `[disc(8)][authority(32)][data_len(u32 LE)][zlib-compressed IDL JSON]`.
+/// The 8-byte discriminator is stripped, not validated — ownership
+/// (`account.owner == program`) is the binding check and is enforced by
+/// [`fetch_anchor_classic_idl`]. Returns `Ok(None)` when the buffer is too
+/// short to be a classic IDL account; `Err` on zlib/JSON decode failure.
+pub fn decode_anchor_classic_account(data: &[u8]) -> Result<Option<ParsedIdl>> {
+    if data.len() < ANCHOR_CLASSIC_HEADER {
+        return Ok(None);
+    }
+    let data_len = u32::from_le_bytes(data[40..44].try_into().unwrap()) as usize;
+    let end = ANCHOR_CLASSIC_HEADER.checked_add(data_len);
+    let end = match end {
+        Some(e) if e <= data.len() => e,
+        _ => return Ok(None),
+    };
+    let compressed = &data[ANCHOR_CLASSIC_HEADER..end];
+    let json = read_all(ZlibDecoder::new(compressed))?;
+    let idl: ParsedIdl =
+        serde_json::from_slice(&json).map_err(|e| SoltraceError::IdlParse(e.to_string()))?;
+    Ok(Some(idl))
+}
+
+/// Fetch a classic Anchor IDL account for `program` (pre-program-metadata).
+///
+/// `Ok(None)` when the account is absent or not owned by `program` (i.e. not a
+/// classic Anchor IDL); `Err` only when a program-owned account fails to decode.
+fn fetch_anchor_classic_idl(
+    rpc: &solana_rpc_client::rpc_client::RpcClient,
+    program: &Pubkey,
+) -> Result<Option<ParsedIdl>> {
+    let pda = derive_anchor_classic_idl_pda(program);
+    match rpc.get_account(&pda) {
+        Ok(account) if account.owner == *program => decode_anchor_classic_account(&account.data),
+        Ok(_) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Unified on-chain IDL fetch: program-metadata canonical PDA first, then the
+/// classic Anchor IDL account as fallback. Returns the first `Some`; `Ok(None)`
+/// means neither standard has a decodable IDL for `program`.
+pub fn fetch_onchain_idl(
+    rpc: &solana_rpc_client::rpc_client::RpcClient,
+    program: &Pubkey,
+) -> Result<Option<ParsedIdl>> {
+    if let Some(idl) = fetch_canonical_idl(rpc, program)? {
+        return Ok(Some(idl));
+    }
+    fetch_anchor_classic_idl(rpc, program)
 }
 
 fn inflate(compression: Compression, data: &[u8]) -> Result<Vec<u8>> {
@@ -234,5 +304,63 @@ mod tests {
         // exercising the get_account Err -> Ok(None) path without a mock harness.
         let rpc = solana_rpc_client::rpc_client::RpcClient::new("http://127.0.0.1:1");
         assert!(fetch_canonical_idl(&rpc, &PROGRAM).unwrap().is_none());
+    }
+
+    // --- classic Anchor IDL (pre-program-metadata) ---
+
+    /// Build `[disc(8)][authority(32)][data_len u32 LE][zlib(plain)]`. The disc
+    /// is arbitrary — our decoder strips without validating (ownership is the
+    /// real gate, exercised only via a live RPC, not here).
+    fn build_classic_idl_account(idl_plain: &[u8]) -> Vec<u8> {
+        let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(idl_plain).unwrap();
+        let compressed = e.finish().unwrap();
+        let mut buf = Vec::with_capacity(ANCHOR_CLASSIC_HEADER + compressed.len());
+        buf.extend_from_slice(&[0u8; 8]); // disc (not validated)
+        buf.extend_from_slice(&[0u8; 32]); // authority (erased)
+        buf.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&compressed);
+        buf
+    }
+
+    #[test]
+    fn classic_pda_matches_anchor_formula() {
+        // Mirrors `IdlAccount::address` in anchor-lang.
+        let program_signer = Pubkey::find_program_address(&[], &PROGRAM).0;
+        let expected =
+            Pubkey::create_with_seed(&program_signer, ANCHOR_CLASSIC_IDL_SEED, &PROGRAM).unwrap();
+        assert_eq!(derive_anchor_classic_idl_pda(&PROGRAM), expected);
+    }
+
+    #[test]
+    fn decode_classic_zlib_round_trips() {
+        let blob = build_classic_idl_account(idl_json());
+        let decoded = decode_anchor_classic_account(&blob)
+            .expect("decode ok")
+            .expect("Some idl");
+        assert_eq!(decoded.address, PROGRAM_STR);
+        assert_eq!(decoded.name.as_deref(), Some("Mini"));
+        assert!(decoded.events.is_empty());
+    }
+
+    #[test]
+    fn decode_classic_too_short_returns_none() {
+        assert!(decode_anchor_classic_account(&[0u8; 10]).unwrap().is_none());
+    }
+
+    #[test]
+    fn decode_classic_bad_zlib_is_err() {
+        // Valid header claiming 32 bytes of payload, but the payload is garbage.
+        let mut blob = vec![0u8; ANCHOR_CLASSIC_HEADER + 32];
+        blob[40..44].copy_from_slice(&32u32.to_le_bytes());
+        assert!(decode_anchor_classic_account(&blob).is_err());
+    }
+
+    #[test]
+    fn fetch_onchain_idl_returns_none_when_both_absent() {
+        // Both the metadata PDA and the classic PDA are absent -> unified fetch
+        // returns None without erroring (port 1 = instant connection-refused).
+        let rpc = solana_rpc_client::rpc_client::RpcClient::new("http://127.0.0.1:1");
+        assert!(fetch_onchain_idl(&rpc, &PROGRAM).unwrap().is_none());
     }
 }

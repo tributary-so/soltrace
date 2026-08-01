@@ -1,7 +1,7 @@
 use crate::{
     db::Database, error::Result as CoreResult, event::EventDecoder, idl::IdlParser,
-    onchain_idl::fetch_canonical_idl, types::CpiEvent, types::DecodedEvent, types::InnerInstructionInfo,
-    types::ParsedIdl, types::RawEvent,
+    onchain_idl::fetch_onchain_idl, types::CpiEvent, types::DecodedEvent,
+    types::InnerInstructionInfo, types::ParsedIdl, types::RawEvent,
 };
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -54,13 +54,13 @@ pub async fn load_idls(idl_parser: &mut IdlParser, idl_dir: &str) -> Result<()> 
 /// Fetch on-chain IDLs for `programs` via the program-metadata canonical PDA.
 ///
 /// One-shot startup call: warn-and-continue per program (mirrors `load_idls`).
-/// Sync because `fetch_canonical_idl` is a blocking RPC — no `.await` to hide.
+/// Sync because `fetch_onchain_idl` is a blocking RPC — no `.await` to hide.
 pub fn load_onchain_idls(
     parser: &mut IdlParser,
     rpc: &solana_rpc_client::rpc_client::RpcClient,
     programs: &[Pubkey],
 ) {
-    load_onchain_idls_with(parser, programs, |p| fetch_canonical_idl(rpc, p));
+    load_onchain_idls_with(parser, programs, |p| fetch_onchain_idl(rpc, p));
 }
 
 /// Inner loop factored out so tests can inject a fake fetcher without an RPC.
@@ -81,7 +81,7 @@ where
                 info!(program = %program, "fetched on-chain IDL");
                 parser.insert_or_replace(idl);
             }
-            Ok(None) => warn!(program = %program, "no canonical Direct on-chain IDL"),
+            Ok(None) => warn!(program = %program, "no on-chain IDL found"),
             Err(e) => warn!(program = %program, error = %e, "failed to fetch on-chain IDL"),
         }
     }
@@ -102,9 +102,7 @@ pub fn retain_indexable(
     loaded: &std::collections::HashMap<String, ParsedIdl>,
 ) -> Vec<String> {
     let original = std::mem::take(program_ids);
-    let (keep, dropped) = original
-        .into_iter()
-        .partition(|p| loaded.contains_key(p));
+    let (keep, dropped) = original.into_iter().partition(|p| loaded.contains_key(p));
     *program_ids = keep;
     dropped
 }
