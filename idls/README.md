@@ -37,7 +37,7 @@ not by filename. The file must be valid JSON with at least:
 
 As an alternative to dropping IDL files into this directory, soltrace can fetch
 IDLs directly from Solana via the
-[program-metadata](../../program-metadata/README.md) on-chain program
+[program-metadata](https://github.com/solana-program/program-metadata#readme) on-chain program
 (`ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S`). Each program's IDL lives at a
 canonical PDA derived from seeds `[program, "idl"+zero-pad-16]` under that
 program. Pass the programs you want indexed as a comma-separated base58 list:

@@ -26,7 +26,7 @@ sha2 = "0.10"
 flate2 = "1"
 arc-swap = "1"
 solana-rpc-client = "3.1"
-spl-program-metadata-client = { path = "../../program-metadata/clients/rust", features = ["fetch"] }
+spl-program-metadata-client = { workspace = true, features = ["fetch"] }
 
 [features]
 default = []
