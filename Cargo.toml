@@ -29,3 +29,4 @@ hex = "0.4"
 base64 = "0.22"
 mongodb = "3"
 async-trait = "0.1"
+spl-program-metadata-client = { git = "https://github.com/solana-program/program-metadata", rev = "75ea1f14" }

@@ -27,7 +27,7 @@ impl PostgresBackend {
     fn row_to_event_record(&self, row: sqlx::postgres::PgRow) -> Result<EventRecord> {
         let id_bytes: Vec<u8> = row.get("id");
         Ok(EventRecord {
-            id: hex::encode(&id_bytes),
+            id: hex::encode(id_bytes),
             slot: row.get("slot"),
             signature: row.get("signature"),
             event_name: row.get("event_name"),
@@ -119,7 +119,7 @@ impl DatabaseBackend for PostgresBackend {
 
     async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
         let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
-        let event_id = hex::encode(&id_bytes);
+        let event_id = hex::encode(id_bytes);
 
         sqlx::query(
             r#"

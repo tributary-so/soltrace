@@ -1,10 +1,11 @@
 ---
 # soltrace-sfg2
 title: Live IDL subscription task (soltrace-live)
-status: todo
+status: completed
 type: epic
+priority: normal
 created_at: 2026-07-28T08:30:16Z
-updated_at: 2026-07-28T08:30:16Z
+updated_at: 2026-07-28T12:48:01Z
 parent: soltrace-z9wq
 blocked_by:
     - soltrace-ipo0

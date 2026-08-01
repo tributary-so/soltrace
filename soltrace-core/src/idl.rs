@@ -118,6 +118,16 @@ impl IdlParser {
         // Fallback: return the event as-is (no fields)
         Some(event.clone())
     }
+
+    /// Insert or replace an IDL keyed by its `address` (on-chain hot-reload).
+    pub fn insert_or_replace(&mut self, idl: ParsedIdl) {
+        self.idls.insert(idl.address.clone(), idl);
+    }
+
+    /// Drop an IDL by program address (e.g. on-chain IDL account was closed).
+    pub fn remove(&mut self, program: &str) {
+        self.idls.remove(program);
+    }
 }
 
 impl Default for IdlParser {
@@ -176,6 +186,33 @@ mod tests {
         assert_eq!(fields[0].field_type, "u64");
         assert_eq!(fields[1].name, "field2");
         assert_eq!(fields[1].field_type, "pubkey");
+    }
+
+    #[test]
+    fn test_insert_or_replace_overwrites_same_address() {
+        let mut parser = IdlParser::new();
+        let v1: ParsedIdl =
+            serde_json::from_str(r#"{"name":"V1","events":[],"address":"Addr1"}"#).unwrap();
+        parser.insert_or_replace(v1);
+        let v2: ParsedIdl =
+            serde_json::from_str(r#"{"name":"V2","events":[],"address":"Addr1"}"#).unwrap();
+        parser.insert_or_replace(v2);
+
+        let idls = parser.get_idls();
+        assert_eq!(idls.len(), 1, "same-address replace must not duplicate");
+        assert_eq!(idls.get("Addr1").unwrap().name.as_deref(), Some("V2"));
+    }
+
+    #[test]
+    fn test_remove_drops_entry() {
+        let mut parser = IdlParser::new();
+        let idl: ParsedIdl =
+            serde_json::from_str(r#"{"name":"X","events":[],"address":"Addr1"}"#).unwrap();
+        parser.insert_or_replace(idl);
+        assert!(parser.get_idls().contains_key("Addr1"));
+
+        parser.remove("Addr1");
+        assert!(!parser.get_idls().contains_key("Addr1"));
     }
 
     #[test]
