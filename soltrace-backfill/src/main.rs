@@ -9,8 +9,8 @@ use solana_client::rpc_config::RpcTransactionConfig;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    load_idls, process_transaction, retry_with_rate_limit, Database, EventDecoder, IdlParser,
-    ProgramPrefixConfig,
+    create_backend, load_idls, process_transaction, retry_with_rate_limit, Database,
+    EventDecoder, IdlParser, ProgramPrefixConfig,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -43,6 +43,11 @@ struct Cli {
     /// IDL directory path
     #[arg(short, long, default_value = "./idls", env("IDL_DIR"))]
     idl_dir: String,
+
+    /// On-chain program IDs to fetch Anchor IDLs from via program-metadata
+    /// (comma-separated base58, e.g. "Prog1,Prog2")
+    #[arg(long, env("ONCHAIN_PROGRAMS"), default_value = "")]
+    onchain_programs: String,
 
     /// Page size for signature pagination (fetches ALL transactions)
     #[arg(short, long, default_value = "1000", env("LIMIT"))]
@@ -95,30 +100,63 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     info!("Concurrency: {}", cli.concurrency);
     info!("Max retries: {}", cli.max_retries);
 
-    // Load IDLs first to extract program IDs
+    // (a) Load file IDLs first (Decision 1: file primary)
     let mut idl_parser = IdlParser::new();
     load_idls(&mut idl_parser, &cli.idl_dir).await?;
 
+    // RPC client constructed early — needed for the on-chain IDL fetch below.
+    let rpc_client = Arc::new(RpcClient::new(cli.rpc_url.clone()));
+
+    // (b) Build the on-chain IDL candidate set (auto-discovery): every program
+    // named in --program-prefixes is probed on-chain (program-metadata then
+    // classic Anchor) unless it already has a file IDL; explicit
+    // --onchain-programs are added too. File precedence is preserved inside
+    // load_onchain_idls; per-program failures warn-and-continue.
+    let mut prefix_config = ProgramPrefixConfig::new();
+    if !cli.program_prefixes.is_empty() {
+        prefix_config.add_mappings_from_string(&cli.program_prefixes);
+    }
+    let mut candidates: Vec<Pubkey> = prefix_config
+        .get_program_ids()
+        .into_iter()
+        .map(|s| s.parse::<Pubkey>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("invalid program id in --program-prefixes: {e}"))?;
+    let onchain_programs = parse_onchain_programs(&cli.onchain_programs)?;
+    for pk in &onchain_programs {
+        if !candidates.contains(pk) {
+            candidates.push(*pk);
+        }
+    }
+    if !candidates.is_empty() {
+        info!(
+            "Fetching on-chain IDL(s) for {} program(s)...",
+            candidates.len()
+        );
+        soltrace_core::load_onchain_idls(&mut idl_parser, &rpc_client, &candidates);
+    }
+
+    // (c) Prefix config from all loaded IDLs (file + on-chain)
     let loaded_idls = idl_parser.get_idls();
-    info!("Loaded {} IDL(s) from {}", loaded_idls.len(), cli.idl_dir);
+    info!("Loaded {} IDL(s) total", loaded_idls.len());
     for (addr, idl) in loaded_idls {
         info!("  - {}: {} events", addr, idl.events.len());
     }
-
-    // Create program prefix configuration from CLI/env
-    let mut prefix_config = ProgramPrefixConfig::new();
-    // Load programs from IDLs with default prefix
+    // Add IDL-backed programs not named in --program-prefixes (default prefix).
     prefix_config.load_from_idls(loaded_idls);
-    // Apply custom prefix mappings from CLI/env
-    if !cli.program_prefixes.is_empty() {
-        prefix_config.add_mappings_from_string(&cli.program_prefixes);
-        info!(
-            "Applied {} custom program prefix mapping(s)",
-            cli.program_prefixes
+
+    let mut program_ids = prefix_config.get_program_ids();
+    // Drop programs with no IDL — without one, every event decodes to the
+    // unknown-discriminator debug-skip, so fetching their signatures/txs is
+    // wasted RPC. On-chain fetch failures land here too (backfill is
+    // point-in-time, so a failed fetch means no IDL, ever).
+    let dropped = soltrace_core::retain_indexable(&mut program_ids, loaded_idls);
+    for pid in &dropped {
+        warn!(
+            "No IDL for program {}; skipping (install an IDL or drop it from --program-prefixes)",
+            pid
         );
     }
-
-    let program_ids = prefix_config.get_program_ids();
     if program_ids.is_empty() {
         error!("No IDLs found in directory. Use --idl-dir <path>");
         return Ok(());
@@ -130,15 +168,15 @@ async fn run_backfill(cli: Cli) -> Result<()> {
         info!("  - {} (prefix: {})", pid, prefix);
     }
 
-    // Create event decoder
-    let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
+    // (d) Wrap parser in ArcSwap + create event decoder
+    let event_decoder = Arc::new(EventDecoder::new(
+        Arc::new(soltrace_core::ArcSwap::from_pointee(idl_parser)),
+        prefix_config,
+    ));
 
     // Initialize database
-    let db = Arc::new(Database::new(&cli.db_url).await?);
+    let db = create_backend(&cli.db_url).await?;
     info!("Database connected: {}", cli.db_url);
-
-    // Initialize RPC client
-    let rpc_client = Arc::new(RpcClient::new(cli.rpc_url));
 
     // Track processed signatures across all programs
     let mut processed_signatures: HashSet<String> = HashSet::new();
@@ -272,12 +310,27 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     Ok(())
 }
 
+/// Parse a comma-separated list of base58 program IDs into `Pubkey`s.
+///
+/// Empty/whitespace entries are dropped. Hard-errors on the first malformed
+/// entry (Decision 11: operator typo must be loud, not silently dropped).
+fn parse_onchain_programs(csv: &str) -> Result<Vec<Pubkey>> {
+    csv.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<Pubkey>()
+                .map_err(|e| anyhow::anyhow!("Invalid --onchain-programs entry '{s}': {e}"))
+        })
+        .collect()
+}
+
 async fn process_signatures_concurrent(
     rpc_client: Arc<RpcClient>,
     signatures: Vec<String>,
     program_id_str: String,
     event_decoder: Arc<EventDecoder>,
-    db: Arc<Database>,
+    db: Database,
     processed_signatures: &mut HashSet<String>,
     concurrency: usize,
     max_retries: u32,
@@ -381,6 +434,8 @@ async fn process_single_signature(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_program_parsing() {
         let programs = "Prog1,Prog2,Prog3";
@@ -388,5 +443,52 @@ mod tests {
 
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0], "Prog1");
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_valid() {
+        let csv = "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        let parsed = parse_onchain_programs(csv).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].to_string(),
+            "11111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_empty_is_noop() {
+        assert!(parse_onchain_programs("").unwrap().is_empty());
+        assert!(parse_onchain_programs(" , , ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_invalid_hard_errors() {
+        assert!(parse_onchain_programs("NOTABASE58").is_err());
+        assert!(parse_onchain_programs(
+            "11111111111111111111111111111111,BAD!!"
+        )
+        .is_err());
+    }
+
+    // --- Regression (soltrace-b4md): --onchain-programs is OPTIONAL with an
+    // empty default → operators who don't pass it see zero behavioral change.
+
+    #[test]
+    fn test_cli_onchain_programs_defaults_empty_when_absent() {
+        let cli = Cli::parse_from(["soltrace-backfill", "--program-prefixes", ""]);
+        assert_eq!(cli.onchain_programs, "", "absent flag must default to empty");
+    }
+
+    #[test]
+    fn test_cli_onchain_programs_accepted_when_present() {
+        let cli = Cli::parse_from([
+            "soltrace-backfill",
+            "--program-prefixes",
+            "",
+            "--onchain-programs",
+            "11111111111111111111111111111111",
+        ]);
+        assert_eq!(cli.onchain_programs, "11111111111111111111111111111111");
     }
 }

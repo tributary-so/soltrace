@@ -15,34 +15,7 @@ pub struct ParsedIdl {
     pub address: String,
 
     #[serde(default)]
-    pub metadata: Option<IdlMetadata>,
-
-    #[serde(default)]
-    pub instructions: Option<serde_json::Value>,
-
-    #[serde(default)]
-    pub accounts: Option<serde_json::Value>,
-
-    #[serde(default)]
-    pub errors: Option<serde_json::Value>,
-
-    #[serde(default)]
     pub types: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IdlMetadata {
-    #[serde(default)]
-    pub version: Option<String>,
-
-    #[serde(default)]
-    pub name: Option<String>,
-
-    #[serde(default)]
-    pub spec: Option<String>,
-
-    #[serde(default)]
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

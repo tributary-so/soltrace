@@ -1,5 +1,5 @@
 use crate::{
-    db::{event_id_to_hex, generate_event_id, DatabaseBackend, EventRecord},
+    db::{generate_event_id, DatabaseBackend, EventRecord},
     error::Result,
     types::{DecodedEvent, RawEvent, Slot},
 };
@@ -75,7 +75,7 @@ impl DatabaseBackend for SqliteBackend {
 
     async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
         let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
-        let event_id = event_id_to_hex(&id_bytes);
+        let event_id = hex::encode(id_bytes);
 
         sqlx::query(
             r#"
@@ -112,7 +112,7 @@ impl DatabaseBackend for SqliteBackend {
         for row in rows {
             let id_bytes: Vec<u8> = row.get("id");
             events.push(EventRecord {
-                id: hex::encode(&id_bytes),
+                id: hex::encode(id_bytes),
                 slot: row.get("slot"),
                 signature: row.get("signature"),
                 event_name: row.get("event_name"),
@@ -136,7 +136,7 @@ impl DatabaseBackend for SqliteBackend {
         for row in rows {
             let id_bytes: Vec<u8> = row.get("id");
             events.push(EventRecord {
-                id: hex::encode(&id_bytes),
+                id: hex::encode(id_bytes),
                 slot: row.get("slot"),
                 signature: row.get("signature"),
                 event_name: row.get("event_name"),

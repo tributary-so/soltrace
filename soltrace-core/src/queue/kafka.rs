@@ -14,11 +14,6 @@ impl KafkaConfig {
     pub fn new(brokers: String) -> Self {
         Self { brokers }
     }
-
-    pub fn from_env() -> Option<Self> {
-        let brokers = std::env::var("KAFKA_BROKERS").ok()?;
-        Some(Self { brokers })
-    }
 }
 
 pub struct KafkaProducer {

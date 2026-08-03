@@ -1,11 +1,12 @@
 use crate::{
-    error::Result,
+    error::{Result, SoltraceError},
     types::{DecodedEvent, RawEvent, Slot},
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 pub fn generate_event_id(signature: &str, index: usize, event_type: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -14,10 +15,6 @@ pub fn generate_event_id(signature: &str, index: usize, event_type: &str) -> [u8
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(&result);
     bytes
-}
-
-pub fn event_id_to_hex(id: &[u8; 32]) -> String {
-    hex::encode(id)
 }
 
 /// Event record stored in the database
@@ -58,53 +55,26 @@ pub trait DatabaseBackend: Send + Sync {
     async fn get_latest_signature(&self) -> Result<Option<String>>;
 }
 
-/// Database wrapper that holds a dynamic backend
-#[derive(Clone)]
-pub struct Database {
-    backend: std::sync::Arc<dyn DatabaseBackend>,
-}
+/// Handle to a configured database backend. Cloneable (Arc) and cheap to share
+/// across tasks.
+pub type Database = Arc<dyn DatabaseBackend>;
 
-impl Database {
-    /// Create a new database instance by parsing the URL scheme
-    pub async fn new(database_url: &str) -> Result<Self> {
-        let backend = crate::db::factory::create_backend(database_url).await?;
-        Ok(Self { backend })
-    }
-
-    pub async fn run_migrations(&self) -> Result<()> {
-        self.backend.run_migrations().await
-    }
-
-    pub async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
-        self.backend.insert_event(event, raw, index).await
-    }
-
-    pub async fn get_events_by_slot_range(
-        &self,
-        start_slot: Slot,
-        end_slot: Slot,
-    ) -> Result<Vec<EventRecord>> {
-        self.backend
-            .get_events_by_slot_range(start_slot, end_slot)
-            .await
-    }
-
-    pub async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>> {
-        self.backend.get_events_by_name(event_name).await
-    }
-
-    pub async fn event_exists(&self, signature: &str) -> Result<bool> {
-        self.backend.event_exists(signature).await
-    }
-
-    pub async fn get_latest_signature(&self) -> Result<Option<String>> {
-        self.backend.get_latest_signature().await
+/// Create a database backend based on the URL scheme.
+pub async fn create_backend(database_url: &str) -> Result<Database> {
+    if database_url.starts_with("sqlite:") {
+        Ok(Arc::new(sqlite::SqliteBackend::new(database_url).await?))
+    } else if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
+        Ok(Arc::new(postgres::PostgresBackend::new(database_url).await?))
+    } else if database_url.starts_with("mongodb://") || database_url.starts_with("mongodb+srv://") {
+        Ok(Arc::new(mongodb::MongoDbBackend::new(database_url).await?))
+    } else {
+        Err(SoltraceError::Database(format!(
+            "Unsupported database URL scheme. Expected sqlite:, postgres://, or mongodb://, got: {}",
+            database_url
+        )))
     }
 }
 
-pub mod factory;
 pub mod mongodb;
 pub mod postgres;
 pub mod sqlite;
-
-pub use factory::create_backend;

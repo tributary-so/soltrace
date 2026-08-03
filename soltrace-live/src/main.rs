@@ -2,6 +2,8 @@
 // arg-bundling is out of scope for this change.
 #![allow(clippy::too_many_arguments)]
 
+mod idl_subscription;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
@@ -13,9 +15,9 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    cpi_dedup_index, decode_cpi_events, load_idls, process_transaction, retry_with_rate_limit,
-    types::RawEvent, utils::extract_event_from_log, Database, EventDecoder, EventQueue, IdlParser,
-    ProgramPrefixConfig, QueueEvent,
+    cpi_dedup_index, create_backend, decode_cpi_events, load_idls, process_transaction,
+    retry_with_rate_limit, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder,
+    EventQueue, IdlParser, ProgramPrefixConfig, QueueEvent,
 };
 #[cfg(feature = "kafka")]
 use soltrace_core::{KafkaConfig, KafkaProducer};
@@ -74,6 +76,11 @@ enum Commands {
         #[arg(short, long, default_value = "./idls", env("IDL_DIR"))]
         idl_dir: String,
 
+        /// On-chain program IDs to fetch Anchor IDLs from via program-metadata
+        /// (comma-separated base58, e.g. "Prog1,Prog2")
+        #[arg(long, env("ONCHAIN_PROGRAMS"), default_value = "")]
+        onchain_programs: String,
+
         /// Log commitment level (processed, confirmed, finalized)
         #[arg(short, long, default_value = "confirmed", env("COMMITMENT"))]
         commitment: String,
@@ -126,6 +133,7 @@ async fn main() -> Result<()> {
             program_prefixes,
             db_url,
             idl_dir,
+            onchain_programs,
             commitment,
             reconnect_delay,
             max_reconnects,
@@ -140,6 +148,7 @@ async fn main() -> Result<()> {
                 program_prefixes,
                 db_url,
                 idl_dir,
+                onchain_programs,
                 commitment,
                 reconnect_delay,
                 max_reconnects,
@@ -158,7 +167,7 @@ async fn main() -> Result<()> {
 async fn init_db(db_url: &str) -> Result<()> {
     info!("Initializing database...");
 
-    let _db = Database::new(db_url).await?;
+    let _db = create_backend(db_url).await?;
     info!("Database initialized successfully at: {}", db_url);
 
     Ok(())
@@ -170,6 +179,7 @@ async fn run_indexer(
     program_prefixes: String,
     db_url: String,
     idl_dir: String,
+    onchain_programs: String,
     commitment: String,
     reconnect_delay: u64,
     max_reconnects: u32,
@@ -217,33 +227,83 @@ async fn run_indexer(
     };
 
     // Initialize database
-    let db = Arc::new(Database::new(&db_url).await?);
+    let db = create_backend(&db_url).await?;
     info!("Database connected: {}", db_url);
 
-    // Load IDLs first to extract program IDs
+    // (a) Load file IDLs first (Decision 1: file primary)
     let mut idl_parser = IdlParser::new();
     load_idls(&mut idl_parser, &idl_dir).await?;
 
+    // RPC client constructed early — needed for the on-chain IDL fetch below.
+    let rpc_client = Arc::new(RpcClient::new(rpc_url.clone()));
+
+    // (b) Build the on-chain IDL candidate set (auto-discovery): every program
+    // named in --program-prefixes is probed on-chain (program-metadata then
+    // classic Anchor) unless it already has a file IDL; explicit
+    // --onchain-programs are added too and drive the accountSubscribe hot-swap
+    // task below. File precedence is preserved inside load_onchain_idls.
+    let mut prefix_config = ProgramPrefixConfig::new();
+    if !program_prefixes.is_empty() {
+        prefix_config.add_mappings_from_string(&program_prefixes);
+    }
+    let mut candidates: Vec<Pubkey> = prefix_config
+        .get_program_ids()
+        .into_iter()
+        .map(|s| s.parse::<Pubkey>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("invalid program id in --program-prefixes: {e}"))?;
+    let onchain_programs = parse_onchain_programs(&onchain_programs)?;
+    for pk in &onchain_programs {
+        if !candidates.contains(pk) {
+            candidates.push(*pk);
+        }
+    }
+    if !candidates.is_empty() {
+        info!(
+            "Fetching on-chain IDL(s) for {} program(s)...",
+            candidates.len()
+        );
+        soltrace_core::load_onchain_idls(&mut idl_parser, &rpc_client, &candidates);
+    }
+
+    // (c) Prefix config from all loaded IDLs (file + on-chain)
     let loaded_idls = idl_parser.get_idls();
-    info!("Loaded {} IDL(s) from {}", loaded_idls.len(), idl_dir);
+    info!("Loaded {} IDL(s) total", loaded_idls.len());
     for (addr, idl) in loaded_idls {
         info!("  - {}: {} events", addr, idl.events.len());
     }
-
-    // Create program prefix configuration from CLI/env
-    let mut prefix_config = ProgramPrefixConfig::new();
-    // Load programs from IDLs with default prefix
+    // Add IDL-backed programs not named in --program-prefixes (default prefix).
     prefix_config.load_from_idls(loaded_idls);
-    // Apply custom prefix mappings from CLI/env
-    if !program_prefixes.is_empty() {
-        prefix_config.add_mappings_from_string(&program_prefixes);
-        info!(
-            "Applied {} custom program prefix mapping(s)",
-            program_prefixes
-        );
+
+    let mut program_ids = prefix_config.get_program_ids();
+
+    // Drop programs with no IDL — without one, every event decodes to the
+    // unknown-discriminator debug-skip, so subscribing to their logs and
+    // fetching their txs is wasted RPC. On-chain-IDL programs are excluded
+    // from the warning (and re-added just below) because their IDL is still
+    // pending via accountSubscribe.
+    let dropped = soltrace_core::retain_indexable(&mut program_ids, loaded_idls);
+    let onchain_str: std::collections::HashSet<String> =
+        onchain_programs.iter().map(|p| p.to_string()).collect();
+    for pid in &dropped {
+        if !onchain_str.contains(pid) {
+            warn!(
+                "No IDL for program {}; skipping (install an IDL, add it to --onchain-programs, or drop it from --program-prefixes)",
+                pid
+            );
+        }
     }
 
-    let program_ids = prefix_config.get_program_ids();
+    // Chicken-and-egg (HANDOFF §3): on-chain programs must be in the logs
+    // filter even before their IDL arrives via accountSubscribe push — events
+    // hit the existing unknown-discriminator debug-skip until the IDL lands.
+    for pk in &onchain_programs {
+        let s = pk.to_string();
+        if !program_ids.contains(&s) {
+            program_ids.push(s);
+        }
+    }
+
     if program_ids.is_empty() {
         error!("No IDLs found in directory. Use --idl-dir <path>");
         return Ok(());
@@ -256,11 +316,25 @@ async fn run_indexer(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!("Failed to parse program IDs: {}", e))?;
 
-    // Create event decoder
-    let event_decoder = Arc::new(EventDecoder::new(idl_parser, prefix_config));
+    // (d) Wrap parser in ArcSwap for hot-reload (live subscription swaps it)
+    let shared_parser = Arc::new(soltrace_core::ArcSwap::from_pointee(idl_parser));
 
-    // Initialize RPC client for gap backfill
-    let rpc_client = Arc::new(RpcClient::new(rpc_url.clone()));
+    // (e) Event decoder reads the shared parser on every decode
+    let event_decoder = Arc::new(EventDecoder::new(shared_parser.clone(), prefix_config));
+
+    // (f) Live IDL subscription task (live only): accountSubscribe pushes
+    // hot-swap the parser; reconnect/immutable/close are handled in the task.
+    // No programs → no-op; the logs loop below runs unchanged.
+    let _idl_sub_task = if !onchain_programs.is_empty() {
+        Some(idl_subscription::spawn_idl_subscription_task(
+            onchain_programs,
+            ws_url.clone(),
+            parse_commitment(&commitment)?,
+            shared_parser.clone(),
+        ))
+    } else {
+        None
+    };
 
     // Spawn gap backfill concurrently with WebSocket
     let backfill_handle = if !no_gap_backfill {
@@ -321,7 +395,7 @@ async fn gap_backfill(
     rpc_client: &Arc<RpcClient>,
     program_ids: &[String],
     event_decoder: &Arc<EventDecoder>,
-    db: &Arc<Database>,
+    db: &Database,
     _kafka_producer: Option<&Arc<dyn EventQueue>>,
     commitment: &str,
     max_retries: u32,
@@ -486,7 +560,7 @@ async fn run_websocket_loop(
     ws_url: &str,
     program_ids: &[Pubkey],
     event_decoder: Arc<EventDecoder>,
-    db: Arc<Database>,
+    db: Database,
     kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     reconnect_delay: u64,
@@ -559,7 +633,7 @@ async fn websocket_handler(
     program_ids: &[Pubkey],
     program_ids_str: &[String],
     event_decoder: Arc<EventDecoder>,
-    db: Arc<Database>,
+    db: Database,
     kafka_producer: Option<Arc<dyn EventQueue>>,
     commitment: &str,
     ping_interval: u64,
@@ -687,6 +761,21 @@ fn parse_commitment(commitment: &str) -> Result<CommitmentConfig> {
     }
 }
 
+/// Parse a comma-separated list of base58 program IDs into `Pubkey`s.
+///
+/// Empty/whitespace entries are dropped. Hard-errors on the first malformed
+/// entry (Decision 11: operator typo must be loud, not silently dropped).
+fn parse_onchain_programs(csv: &str) -> Result<Vec<Pubkey>> {
+    csv.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<Pubkey>()
+                .map_err(|e| anyhow::anyhow!("Invalid --onchain-programs entry '{s}': {e}"))
+        })
+        .collect()
+}
+
 /// Process a logs message from PubsubClient
 async fn process_logs_message(
     message: solana_client::rpc_response::RpcLogsResponse,
@@ -709,8 +798,53 @@ async fn process_logs_message(
     let signature = &message.signature;
     let logs = &message.logs;
 
-    // Process logs for events
     let mut events_found = 0;
+
+    // RpcLogsResponse carries no slot. Fetch the full transaction once so both
+    // the emit! (log-scraped) and emit_cpi! (inner-instruction) paths share the
+    // real slot and block_time. maxSupportedTransactionVersion=0 expands ALT keys.
+    let sig = match signature.parse::<solana_sdk::signature::Signature>() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Failed to parse signature {}: {}", signature, e);
+            return Ok(events_found);
+        }
+    };
+
+    let tx_result = retry_with_rate_limit(
+        || {
+            let rpc = rpc_client.clone();
+            async move {
+                rpc.get_transaction_with_config(
+                    &sig,
+                    RpcTransactionConfig {
+                        encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                        commitment: Some(commitment_config),
+                        max_supported_transaction_version: Some(0),
+                    },
+                )
+            }
+        },
+        max_retries,
+    )
+    .await;
+
+    let transaction = match tx_result {
+        Ok(tx) => tx,
+        Err(e) => {
+            warn!(
+                "Failed to fetch tx {} for decode (emit! + emit_cpi!): {}",
+                signature, e
+            );
+            return Ok(events_found);
+        }
+    };
+
+    let slot = transaction.slot;
+    let timestamp = transaction
+        .block_time
+        .and_then(|bt| chrono::DateTime::from_timestamp(bt, 0))
+        .unwrap_or_else(Utc::now);
 
     for log in logs {
         for program_id in program_ids {
@@ -720,11 +854,11 @@ async fn process_logs_message(
                     Ok(decoded_event) => {
                         // Create raw event record
                         let raw_event = RawEvent {
-                            slot: 0, // Not provided in RpcLogsResponse
+                            slot,
                             signature: signature.clone(),
                             program_id: *program_id,
                             log: log.clone(),
-                            timestamp: Utc::now(),
+                            timestamp,
                         };
 
                         // Store event in database
@@ -772,52 +906,10 @@ async fn process_logs_message(
         }
     }
 
-    // emit_cpi! events live in inner instructions, NOT program logs. The WS
-    // log notification only carries the signature; fetch the full transaction
-    // (maxSupportedTransactionVersion=0 expands ALT keys) to access them.
-    //
-    // Decode failures fall back to hex (event.rs) and unknown-discriminator
-    // events are skipped — never crashes the indexer (see decode_cpi_events).
-    let sig = match signature.parse::<solana_sdk::signature::Signature>() {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("Failed to parse signature {}: {}", signature, e);
-            return Ok(events_found);
-        }
-    };
-
-    let tx_result = retry_with_rate_limit(
-        || {
-            let rpc = rpc_client.clone();
-            async move {
-                rpc.get_transaction_with_config(
-                    &sig,
-                    RpcTransactionConfig {
-                        encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
-                        commitment: Some(commitment_config),
-                        max_supported_transaction_version: Some(0),
-                    },
-                )
-            }
-        },
-        max_retries,
-    )
-    .await;
-
-    let transaction = match tx_result {
-        Ok(tx) => tx,
-        Err(e) => {
-            warn!("Failed to fetch tx {} for CPI decode: {}", signature, e);
-            return Ok(events_found);
-        }
-    };
-
-    let slot = transaction.slot;
-    let timestamp = transaction
-        .block_time
-        .and_then(|bt| chrono::DateTime::from_timestamp(bt, 0))
-        .unwrap_or_else(Utc::now);
-
+    // emit_cpi! events live in inner instructions, NOT program logs. The full
+    // transaction fetched above exposes them. Decode failures fall back to hex
+    // (event.rs); unknown-discriminator events are skipped — never crashes the
+    // indexer (see decode_cpi_events).
     for (cpi, decoded_event) in decode_cpi_events(&transaction, signature, event_decoder) {
         let raw_event = RawEvent {
             slot,
@@ -893,5 +985,65 @@ mod tests {
         assert!(parse_commitment("processed").is_ok());
         assert!(parse_commitment("finalized").is_ok());
         assert!(parse_commitment("invalid").is_err());
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_valid() {
+        let csv = "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        let parsed = parse_onchain_programs(csv).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].to_string(),
+            "11111111111111111111111111111111"
+        );
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_empty_is_noop() {
+        assert!(parse_onchain_programs("").unwrap().is_empty());
+        assert!(parse_onchain_programs(" , , ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_onchain_programs_invalid_hard_errors() {
+        assert!(parse_onchain_programs("NOTABASE58").is_err());
+        // First bad entry short-circuits even when preceded by a valid one.
+        assert!(parse_onchain_programs(
+            "11111111111111111111111111111111,BAD!!"
+        )
+        .is_err());
+    }
+
+    // --- Regression (soltrace-b4md): --onchain-programs is OPTIONAL with an
+    // empty default, so operators who don't pass it see zero behavioral change.
+    // These lock that contract at the CLI surface (deterministic, no network).
+
+    #[test]
+    fn test_cli_onchain_programs_defaults_empty_when_absent() {
+        let cli = Cli::parse_from(["soltrace-live", "run", "--program-prefixes", ""]);
+        match cli.command {
+            Commands::Run { ref onchain_programs, .. } => {
+                assert_eq!(onchain_programs, "", "absent flag must default to empty");
+            }
+            _ => panic!("expected Run subcommand"),
+        }
+    }
+
+    #[test]
+    fn test_cli_onchain_programs_accepted_when_present() {
+        let cli = Cli::parse_from([
+            "soltrace-live",
+            "run",
+            "--program-prefixes",
+            "",
+            "--onchain-programs",
+            "11111111111111111111111111111111",
+        ]);
+        match cli.command {
+            Commands::Run { ref onchain_programs, .. } => {
+                assert_eq!(onchain_programs, "11111111111111111111111111111111");
+            }
+            _ => panic!("expected Run subcommand"),
+        }
     }
 }
