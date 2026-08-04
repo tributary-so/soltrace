@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Soltrace
 # Stage 1: Builder - Compiles Rust binaries
-FROM docker.io/library/rust:1.88-bookworm AS builder
+FROM docker.io/library/rust:1.97-slim-bookworm AS builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -19,7 +19,7 @@ RUN cargo build --release --features kafka
 RUN ls target/ && pwd target/ && ls target/release/*
 
 # Stage 2: Runtime - Contains only the binaries
-FROM docker.io/library/rust:1.88-bookworm
+FROM docker.io/library/rust:1.97-slim-bookworm
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
