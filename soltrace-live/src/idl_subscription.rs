@@ -10,14 +10,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::stream::SelectAll;
 use futures::StreamExt;
+use futures::stream::SelectAll;
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_client::rpc_config::RpcAccountInfoConfig;
 use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
-use soltrace_core::{decode_metadata_account, derive_canonical_idl_pda, ArcSwap, IdlParser};
+use soltrace_core::{ArcSwap, IdlParser, decode_metadata_account, derive_canonical_idl_pda};
 use spl_program_metadata_client::accounts::Metadata;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
@@ -267,7 +267,11 @@ mod tests {
     fn close_push_removes_idl_and_unsubscribes() {
         let parser = empty_parser();
         // Seed with an IDL first.
-        handle_account_notification(&PROGRAM, Some(&build_idl_account(&PROGRAM, true, 0, &idl_json())), &parser);
+        handle_account_notification(
+            &PROGRAM,
+            Some(&build_idl_account(&PROGRAM, true, 0, &idl_json())),
+            &parser,
+        );
         assert!(parser.load().get_idls().contains_key(PROGRAM_STR));
 
         let action = handle_account_notification(&PROGRAM, None, &parser);
@@ -289,7 +293,11 @@ mod tests {
     fn garbage_decode_retains_last_known_good() {
         let parser = empty_parser();
         // Seed with a valid IDL.
-        handle_account_notification(&PROGRAM, Some(&build_idl_account(&PROGRAM, true, 0, &idl_json())), &parser);
+        handle_account_notification(
+            &PROGRAM,
+            Some(&build_idl_account(&PROGRAM, true, 0, &idl_json())),
+            &parser,
+        );
 
         // Push garbage that looks like a Metadata account but has corrupt data.
         let garbage = build_idl_account(&PROGRAM, true, 0, b"not valid json");
@@ -298,7 +306,10 @@ mod tests {
         assert_eq!(action, SubscriptionAction::Keep);
         // Original IDL is still there.
         let loaded = parser.load();
-        let idl = loaded.get_idls().get(PROGRAM_STR).expect("original retained");
+        let idl = loaded
+            .get_idls()
+            .get(PROGRAM_STR)
+            .expect("original retained");
         assert_eq!(idl.name.as_deref(), Some("TestIDL"));
     }
 
@@ -379,7 +390,8 @@ mod tests {
                 while !stop.load(Ordering::Relaxed) {
                     let idl = format!(
                         r#"{{"name":"V{}","events":[],"address":"{}"}}"#,
-                        i % 200, PROGRAM_STR
+                        i % 200,
+                        PROGRAM_STR
                     );
                     let blob = build_idl_account(&PROGRAM, true, 0, idl.as_bytes());
                     handle_account_notification(&PROGRAM, Some(&blob), &parser);
@@ -396,10 +408,7 @@ mod tests {
                     let loaded = parser.load();
                     if let Some(idl) = loaded.get_idls().get(PROGRAM_STR) {
                         let name = idl.name.as_ref().expect("name present if IDL exists");
-                        assert!(
-                            name.starts_with('V'),
-                            "torn read: name={name}"
-                        );
+                        assert!(name.starts_with('V'), "torn read: name={name}");
                     }
                     // Empty (pre-first-write) is also valid — just not partial.
                 }
@@ -424,11 +433,8 @@ mod tests {
         let prog_b_str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
         let idl_a = idl_json();
-        let idl_b: Vec<u8> = format!(
-            r#"{{"name":"IDB","events":[],"address":"{}"}}"#,
-            prog_b_str
-        )
-        .into_bytes();
+        let idl_b: Vec<u8> =
+            format!(r#"{{"name":"IDB","events":[],"address":"{}"}}"#, prog_b_str).into_bytes();
 
         let blob_a = build_idl_account(&PROGRAM, true, 0, &idl_a);
         let blob_b = build_idl_account(&prog_b, true, 0, &idl_b);
@@ -500,7 +506,10 @@ mod tests {
             &parser,
         )
         .await;
-        assert!(result.is_err(), "dead endpoint should return Err, got {result:?}");
+        assert!(
+            result.is_err(),
+            "dead endpoint should return Err, got {result:?}"
+        );
         // Parser untouched.
         assert!(parser.load().get_idls().is_empty());
     }

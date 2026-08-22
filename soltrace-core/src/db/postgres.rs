@@ -1,5 +1,5 @@
 use crate::{
-    db::{generate_event_id, DatabaseBackend, EventRecord},
+    db::{DatabaseBackend, EventRecord, generate_event_id},
     error::Result,
     types::{DecodedEvent, RawEvent, Slot},
 };
@@ -117,7 +117,12 @@ impl DatabaseBackend for PostgresBackend {
         Ok(())
     }
 
-    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
+    async fn insert_event(
+        &self,
+        event: &DecodedEvent,
+        raw: &RawEvent,
+        index: usize,
+    ) -> Result<String> {
         let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
         let event_id = hex::encode(id_bytes);
 

@@ -35,7 +35,12 @@ pub trait DatabaseBackend: Send + Sync {
     async fn run_migrations(&self) -> Result<()>;
 
     /// Store a decoded event
-    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String>;
+    async fn insert_event(
+        &self,
+        event: &DecodedEvent,
+        raw: &RawEvent,
+        index: usize,
+    ) -> Result<String>;
 
     /// Get events by slot range
     async fn get_events_by_slot_range(
@@ -64,7 +69,9 @@ pub async fn create_backend(database_url: &str) -> Result<Database> {
     if database_url.starts_with("sqlite:") {
         Ok(Arc::new(sqlite::SqliteBackend::new(database_url).await?))
     } else if database_url.starts_with("postgres://") || database_url.starts_with("postgresql://") {
-        Ok(Arc::new(postgres::PostgresBackend::new(database_url).await?))
+        Ok(Arc::new(
+            postgres::PostgresBackend::new(database_url).await?,
+        ))
     } else if database_url.starts_with("mongodb://") || database_url.starts_with("mongodb+srv://") {
         Ok(Arc::new(mongodb::MongoDbBackend::new(database_url).await?))
     } else {
