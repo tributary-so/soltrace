@@ -1,11 +1,11 @@
 use crate::{
-    db::{generate_event_id, DatabaseBackend, EventRecord},
+    db::{DatabaseBackend, EventRecord, generate_event_id},
     error::{Result, SoltraceError},
     types::{DecodedEvent, RawEvent, Slot},
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use mongodb::{bson, bson::doc, options::IndexOptions, Client, Collection, IndexModel};
+use mongodb::{Client, Collection, IndexModel, bson, bson::doc, options::IndexOptions};
 use serde::{Deserialize, Serialize};
 
 /// MongoDB document structure for events
@@ -101,7 +101,12 @@ impl DatabaseBackend for MongoDbBackend {
         Ok(())
     }
 
-    async fn insert_event(&self, event: &DecodedEvent, raw: &RawEvent, index: usize) -> Result<String> {
+    async fn insert_event(
+        &self,
+        event: &DecodedEvent,
+        raw: &RawEvent,
+        index: usize,
+    ) -> Result<String> {
         let id_bytes = generate_event_id(&raw.signature, index, &event.event_name);
         let event_id = hex::encode(id_bytes);
 
@@ -204,7 +209,9 @@ impl DatabaseBackend for MongoDbBackend {
             .sort(doc! { "slot": -1, "timestamp": -1 })
             .limit(1)
             .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to query latest signature: {}", e)))?;
+            .map_err(|e| {
+                SoltraceError::Database(format!("Failed to query latest signature: {}", e))
+            })?;
 
         if cursor
             .advance()

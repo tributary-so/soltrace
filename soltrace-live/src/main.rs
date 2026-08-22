@@ -15,9 +15,9 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
+    Database, EventDecoder, EventQueue, IdlParser, ProgramPrefixConfig, QueueEvent,
     cpi_dedup_index, create_backend, decode_cpi_events, load_idls, process_transaction,
-    retry_with_rate_limit, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder,
-    EventQueue, IdlParser, ProgramPrefixConfig, QueueEvent,
+    retry_with_rate_limit, types::RawEvent, utils::extract_event_from_log,
 };
 #[cfg(feature = "kafka")]
 use soltrace_core::{KafkaConfig, KafkaProducer};
@@ -216,7 +216,9 @@ async fn run_indexer(
             }
             #[cfg(not(feature = "kafka"))]
             {
-                error!("Kafka brokers configured but 'kafka' feature not enabled. Recompile with --features kafka");
+                error!(
+                    "Kafka brokers configured but 'kafka' feature not enabled. Recompile with --features kafka"
+                );
                 return Err(anyhow::anyhow!("Kafka feature not enabled"));
             }
         }
@@ -510,7 +512,7 @@ async fn gap_backfill(
                                     solana_transaction_status::UiTransactionEncoding::Json,
                                 ),
                                 commitment: Some(commitment_config),
-                                max_supported_transaction_version: Some(0),
+                                max_supported_transaction_version: Some(1),
                             },
                         )
                     }
@@ -802,7 +804,7 @@ async fn process_logs_message(
 
     // RpcLogsResponse carries no slot. Fetch the full transaction once so both
     // the emit! (log-scraped) and emit_cpi! (inner-instruction) paths share the
-    // real slot and block_time. maxSupportedTransactionVersion=0 expands ALT keys.
+    // real slot and block_time. maxSupportedTransactionVersion=1 expands ALT keys.
     let sig = match signature.parse::<solana_sdk::signature::Signature>() {
         Ok(s) => s,
         Err(e) => {
@@ -820,7 +822,7 @@ async fn process_logs_message(
                     RpcTransactionConfig {
                         encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
                         commitment: Some(commitment_config),
-                        max_supported_transaction_version: Some(0),
+                        max_supported_transaction_version: Some(1),
                     },
                 )
             }
@@ -992,10 +994,7 @@ mod tests {
         let csv = "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
         let parsed = parse_onchain_programs(csv).unwrap();
         assert_eq!(parsed.len(), 2);
-        assert_eq!(
-            parsed[0].to_string(),
-            "11111111111111111111111111111111"
-        );
+        assert_eq!(parsed[0].to_string(), "11111111111111111111111111111111");
     }
 
     #[test]
@@ -1008,10 +1007,7 @@ mod tests {
     fn test_parse_onchain_programs_invalid_hard_errors() {
         assert!(parse_onchain_programs("NOTABASE58").is_err());
         // First bad entry short-circuits even when preceded by a valid one.
-        assert!(parse_onchain_programs(
-            "11111111111111111111111111111111,BAD!!"
-        )
-        .is_err());
+        assert!(parse_onchain_programs("11111111111111111111111111111111,BAD!!").is_err());
     }
 
     // --- Regression (soltrace-b4md): --onchain-programs is OPTIONAL with an
@@ -1022,7 +1018,10 @@ mod tests {
     fn test_cli_onchain_programs_defaults_empty_when_absent() {
         let cli = Cli::parse_from(["soltrace-live", "run", "--program-prefixes", ""]);
         match cli.command {
-            Commands::Run { ref onchain_programs, .. } => {
+            Commands::Run {
+                ref onchain_programs,
+                ..
+            } => {
                 assert_eq!(onchain_programs, "", "absent flag must default to empty");
             }
             _ => panic!("expected Run subcommand"),
@@ -1040,7 +1039,10 @@ mod tests {
             "11111111111111111111111111111111",
         ]);
         match cli.command {
-            Commands::Run { ref onchain_programs, .. } => {
+            Commands::Run {
+                ref onchain_programs,
+                ..
+            } => {
                 assert_eq!(onchain_programs, "11111111111111111111111111111111");
             }
             _ => panic!("expected Run subcommand"),

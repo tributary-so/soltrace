@@ -4,7 +4,7 @@ use crate::{
     types::InnerInstructionInfo, types::ParsedIdl, types::RawEvent,
 };
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::{
     EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiInstruction, UiMessage,
@@ -313,7 +313,7 @@ pub fn extract_event_from_log(log: &str) -> Option<Vec<u8>> {
 /// Extract inner (CPI) instructions from a transaction's metadata, resolving
 /// account keys against the versioned-tx-aware account key table.
 ///
-/// `getTransaction` with `maxSupportedTransactionVersion: 0` expands address
+/// `getTransaction` with `maxSupportedTransactionVersion: 1` expands address
 /// lookup table keys into `accountKeys`, so indices resolve directly. Inner
 /// instructions whose account index falls outside the key table (e.g. ALT
 /// accounts no longer on-chain) are skipped rather than crashing the indexer.
@@ -455,7 +455,17 @@ mod tests {
         account_keys: serde_json::Value,
         inner_ix: serde_json::Value,
     ) -> EncodedConfirmedTransactionWithStatusMeta {
-        let json = serde_json::json!({
+        build_tx_with_version(None, account_keys, inner_ix)
+    }
+
+    /// `version` mirrors the `version` field of a `getTransaction` response
+    /// (absent for legacy, 0/1 for versioned transactions).
+    fn build_tx_with_version(
+        version: Option<u8>,
+        account_keys: serde_json::Value,
+        inner_ix: serde_json::Value,
+    ) -> EncodedConfirmedTransactionWithStatusMeta {
+        let mut json = serde_json::json!({
             "slot": 42,
             "transaction": {
                 "signatures": ["sig"],
@@ -480,6 +490,9 @@ mod tests {
             },
             "blockTime": 0
         });
+        if let Some(v) = version {
+            json["transaction"]["version"] = serde_json::json!(v);
+        }
         serde_json::from_value(json).expect("failed to deserialize test transaction")
     }
 
@@ -547,6 +560,40 @@ mod tests {
             }]),
         );
         assert!(extract_inner_instructions(&tx).is_empty());
+    }
+
+    #[test]
+    fn test_extract_inner_instructions_accepts_transaction_v1() {
+        // Agave 4.2 (SIMD-0385): responses for v1 transactions carry
+        // "version": 1. Deserialization and account-index resolution must be
+        // unaffected — soltrace declares maxSupportedTransactionVersion 1.
+        let raw_data = vec![1, 2, 3];
+        let tx = build_tx_with_version(
+            Some(1),
+            serde_json::json!([
+                "11111111111111111111111111111111",
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            ]),
+            serde_json::json!([{
+                "index": 0,
+                "instructions": [{
+                    "programIdIndex": 1,
+                    "accounts": [0],
+                    "data": bs58::encode(&raw_data).into_string(),
+                    "stackHeight": 2
+                }]
+            }]),
+        );
+
+        let result = extract_inner_instructions(&tx);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].program_id,
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(result[0].data, raw_data);
     }
 
     // --- CPI event extraction tests ---
@@ -628,8 +675,16 @@ mod tests {
 
         let dropped = retain_indexable(&mut program_ids, loaded);
 
-        assert_eq!(program_ids, vec![with_idl.to_string()], "IDL-backed program kept");
-        assert_eq!(dropped, vec![orphan], "IDL-less program dropped for caller to warn");
+        assert_eq!(
+            program_ids,
+            vec![with_idl.to_string()],
+            "IDL-backed program kept"
+        );
+        assert_eq!(
+            dropped,
+            vec![orphan],
+            "IDL-less program dropped for caller to warn"
+        );
     }
 
     /// Minimal IDL for `program_id` with one event `Swap { amount: u64 }`.
@@ -684,7 +739,10 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))),
+            ProgramPrefixConfig::new(),
+        );
 
         // <disc(8)><borsh u64 = 42>
         let disc = IdlParser::calculate_discriminator("Swap");
@@ -707,7 +765,10 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))),
+            ProgramPrefixConfig::new(),
+        );
 
         // Swap discriminator matched, but borsh payload truncated (u64 needs 8,
         // give 2) -> IdlEventDecoder errors -> hex fallback must fire, not crash.
@@ -740,7 +801,10 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))),
+            ProgramPrefixConfig::new(),
+        );
 
         let disc = IdlParser::calculate_discriminator("Swap");
         let mut payload = disc.to_vec();
@@ -820,7 +884,10 @@ mod tests {
         let program_id: Pubkey = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
             .parse()
             .unwrap();
-        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(swap_idl(&program_id))),
+            ProgramPrefixConfig::new(),
+        );
 
         let disc = IdlParser::calculate_discriminator("Swap");
         let mut payload = disc.to_vec();
@@ -844,7 +911,10 @@ mod tests {
             .parse()
             .unwrap();
         // Decoder with NO IDL loaded for `unknown`.
-        let decoder = EventDecoder::new(std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(IdlParser::new())), ProgramPrefixConfig::new());
+        let decoder = EventDecoder::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(IdlParser::new())),
+            ProgramPrefixConfig::new(),
+        );
 
         let disc = IdlParser::calculate_discriminator("Swap");
         let mut payload = disc.to_vec();
@@ -886,9 +956,11 @@ mod tests {
         });
 
         assert_eq!(parser.get_idls().len(), 2, "both IDLs should land");
-        assert!(parser
-            .get_idls()
-            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
+        assert!(
+            parser
+                .get_idls()
+                .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+        );
     }
 
     #[test]
@@ -932,9 +1004,11 @@ mod tests {
         });
 
         assert_eq!(parser.get_idls().len(), 1, "only the Ok(Some) entry lands");
-        assert!(parser
-            .get_idls()
-            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
+        assert!(
+            parser
+                .get_idls()
+                .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+        );
     }
 
     #[test]
@@ -958,10 +1032,16 @@ mod tests {
         });
 
         assert!(!fetch_called, "fetcher must not be called for existing IDL");
-        assert_eq!(parser.get_idls().len(), 1, "existing IDL must not be replaced");
-        assert!(parser
-            .get_idls()
-            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
+        assert_eq!(
+            parser.get_idls().len(),
+            1,
+            "existing IDL must not be replaced"
+        );
+        assert!(
+            parser
+                .get_idls()
+                .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+        );
     }
 
     // --- Epic 1 integration tests (soltrace-as68) ---
@@ -973,8 +1053,7 @@ mod tests {
     fn metadata_blob(program: &Pubkey, idl_json: &[u8]) -> Vec<u8> {
         use spl_program_metadata_client::types::{Compression, DataSource, Encoding};
 
-        let mut enc =
-            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(idl_json).unwrap();
         let data = enc.finish().unwrap();
 
@@ -1047,7 +1126,11 @@ mod tests {
         let payload: Vec<u8> = disc.iter().copied().chain(42u64.to_le_bytes()).collect();
 
         // Before swap: no IDL → decode fails cleanly.
-        assert!(decoder.decode_event(&prog.to_string(), "sig", &payload).is_err());
+        assert!(
+            decoder
+                .decode_event(&prog.to_string(), "sig", &payload)
+                .is_err()
+        );
 
         // Swap in a parser with the Swap event (on-chain IDL arrived).
         shared.store(std::sync::Arc::new(swap_idl(&prog)));

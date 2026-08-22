@@ -56,7 +56,7 @@ pub struct RawEvent {
 /// transactions.
 ///
 /// Built from `meta.innerInstructions` of a transaction fetched via
-/// `getTransaction` with `maxSupportedTransactionVersion: 0`, which expands
+/// `getTransaction` with `maxSupportedTransactionVersion: 1`, which expands
 /// address-lookup-table keys into `accountKeys` so indices resolve directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerInstructionInfo {

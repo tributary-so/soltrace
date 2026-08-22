@@ -9,8 +9,8 @@ use solana_client::rpc_config::RpcTransactionConfig;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    create_backend, load_idls, process_transaction, retry_with_rate_limit, Database,
-    EventDecoder, IdlParser, ProgramPrefixConfig,
+    Database, EventDecoder, IdlParser, ProgramPrefixConfig, create_backend, load_idls,
+    process_transaction, retry_with_rate_limit,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -416,7 +416,7 @@ async fn process_single_signature(
                 RpcTransactionConfig {
                     encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
                     commitment: Some(CommitmentConfig::confirmed()),
-                    max_supported_transaction_version: Some(0),
+                    max_supported_transaction_version: Some(1),
                 },
             )
         },
@@ -450,10 +450,7 @@ mod tests {
         let csv = "11111111111111111111111111111111,TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
         let parsed = parse_onchain_programs(csv).unwrap();
         assert_eq!(parsed.len(), 2);
-        assert_eq!(
-            parsed[0].to_string(),
-            "11111111111111111111111111111111"
-        );
+        assert_eq!(parsed[0].to_string(), "11111111111111111111111111111111");
     }
 
     #[test]
@@ -465,10 +462,7 @@ mod tests {
     #[test]
     fn test_parse_onchain_programs_invalid_hard_errors() {
         assert!(parse_onchain_programs("NOTABASE58").is_err());
-        assert!(parse_onchain_programs(
-            "11111111111111111111111111111111,BAD!!"
-        )
-        .is_err());
+        assert!(parse_onchain_programs("11111111111111111111111111111111,BAD!!").is_err());
     }
 
     // --- Regression (soltrace-b4md): --onchain-programs is OPTIONAL with an
@@ -477,7 +471,10 @@ mod tests {
     #[test]
     fn test_cli_onchain_programs_defaults_empty_when_absent() {
         let cli = Cli::parse_from(["soltrace-backfill", "--program-prefixes", ""]);
-        assert_eq!(cli.onchain_programs, "", "absent flag must default to empty");
+        assert_eq!(
+            cli.onchain_programs, "",
+            "absent flag must default to empty"
+        );
     }
 
     #[test]
