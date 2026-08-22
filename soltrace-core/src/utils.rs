@@ -313,7 +313,7 @@ pub fn extract_event_from_log(log: &str) -> Option<Vec<u8>> {
 /// Extract inner (CPI) instructions from a transaction's metadata, resolving
 /// account keys against the versioned-tx-aware account key table.
 ///
-/// `getTransaction` with `maxSupportedTransactionVersion: 0` expands address
+/// `getTransaction` with `maxSupportedTransactionVersion: 1` expands address
 /// lookup table keys into `accountKeys`, so indices resolve directly. Inner
 /// instructions whose account index falls outside the key table (e.g. ALT
 /// accounts no longer on-chain) are skipped rather than crashing the indexer.
@@ -455,7 +455,17 @@ mod tests {
         account_keys: serde_json::Value,
         inner_ix: serde_json::Value,
     ) -> EncodedConfirmedTransactionWithStatusMeta {
-        let json = serde_json::json!({
+        build_tx_with_version(None, account_keys, inner_ix)
+    }
+
+    /// `version` mirrors the `version` field of a `getTransaction` response
+    /// (absent for legacy, 0/1 for versioned transactions).
+    fn build_tx_with_version(
+        version: Option<u8>,
+        account_keys: serde_json::Value,
+        inner_ix: serde_json::Value,
+    ) -> EncodedConfirmedTransactionWithStatusMeta {
+        let mut json = serde_json::json!({
             "slot": 42,
             "transaction": {
                 "signatures": ["sig"],
@@ -480,6 +490,9 @@ mod tests {
             },
             "blockTime": 0
         });
+        if let Some(v) = version {
+            json["transaction"]["version"] = serde_json::json!(v);
+        }
         serde_json::from_value(json).expect("failed to deserialize test transaction")
     }
 
@@ -547,6 +560,40 @@ mod tests {
             }]),
         );
         assert!(extract_inner_instructions(&tx).is_empty());
+    }
+
+    #[test]
+    fn test_extract_inner_instructions_accepts_transaction_v1() {
+        // Agave 4.2 (SIMD-0385): responses for v1 transactions carry
+        // "version": 1. Deserialization and account-index resolution must be
+        // unaffected — soltrace declares maxSupportedTransactionVersion 1.
+        let raw_data = vec![1, 2, 3];
+        let tx = build_tx_with_version(
+            Some(1),
+            serde_json::json!([
+                "11111111111111111111111111111111",
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            ]),
+            serde_json::json!([{
+                "index": 0,
+                "instructions": [{
+                    "programIdIndex": 1,
+                    "accounts": [0],
+                    "data": bs58::encode(&raw_data).into_string(),
+                    "stackHeight": 2
+                }]
+            }]),
+        );
+
+        let result = extract_inner_instructions(&tx);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].program_id,
+            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(result[0].data, raw_data);
     }
 
     // --- CPI event extraction tests ---

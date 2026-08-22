@@ -510,7 +510,7 @@ async fn gap_backfill(
                                     solana_transaction_status::UiTransactionEncoding::Json,
                                 ),
                                 commitment: Some(commitment_config),
-                                max_supported_transaction_version: Some(0),
+                                max_supported_transaction_version: Some(1),
                             },
                         )
                     }
@@ -802,7 +802,7 @@ async fn process_logs_message(
 
     // RpcLogsResponse carries no slot. Fetch the full transaction once so both
     // the emit! (log-scraped) and emit_cpi! (inner-instruction) paths share the
-    // real slot and block_time. maxSupportedTransactionVersion=0 expands ALT keys.
+    // real slot and block_time. maxSupportedTransactionVersion=1 expands ALT keys.
     let sig = match signature.parse::<solana_sdk::signature::Signature>() {
         Ok(s) => s,
         Err(e) => {
@@ -820,7 +820,7 @@ async fn process_logs_message(
                     RpcTransactionConfig {
                         encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
                         commitment: Some(commitment_config),
-                        max_supported_transaction_version: Some(0),
+                        max_supported_transaction_version: Some(1),
                     },
                 )
             }

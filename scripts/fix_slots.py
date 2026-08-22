@@ -47,7 +47,7 @@ def rpc_call(rpc_url: str, method: str, params: list, timeout: int = 30) -> dict
 
 
 def fetch_slot(rpc_url: str, signature: str, max_retries: int = 4) -> int | None:
-    params = [signature, {"maxSupportedTransactionVersion": 0}]
+    params = [signature, {"maxSupportedTransactionVersion": 1}]
     backoff = 1.0
     for _ in range(max_retries):
         try:
