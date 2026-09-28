@@ -54,7 +54,19 @@ pub fn decode_metadata_account(
     if !matches!(meta.data_source, DataSource::Direct) {
         return Ok(None);
     }
-    let bytes = inflate(meta.compression, &meta.data)?;
+    let payload = {
+        // The codama layout pads 5 zero bytes between `data_length` and the
+        // payload (postOffset on dataLength), and anchor >= 1.x writes that
+        // layout — but the generated client drops the pad, so `meta.data` can
+        // carry stray NULs ahead of the payload. `data_length` is
+        // authoritative and the payload sits at the tail.
+        let len = meta.data_length as usize;
+        match meta.data.len().checked_sub(len) {
+            Some(start) if len > 0 => &meta.data[start..],
+            _ => meta.data.as_slice(),
+        }
+    };
+    let bytes = inflate(meta.compression, payload)?;
     let decoded = decode_bytes(meta.encoding, &bytes)?;
     let idl: ParsedIdl =
         serde_json::from_slice(&decoded).map_err(|e| SoltraceError::IdlParse(e.to_string()))?;
@@ -268,6 +280,24 @@ mod tests {
         assert_eq!(decoded.address, PROGRAM_STR);
         assert_eq!(decoded.name.as_deref(), Some("Mini"));
         assert!(decoded.events.is_empty());
+    }
+
+    #[test]
+    fn decode_canonical_padded_layout_round_trips() {
+        // anchor >= 1.x writes the codama post-offset pad: 5 zero bytes
+        // between data_length and the payload. Verified against devnet
+        // account 5wvLVHdhpECNKiohJZ3qHdWAa9vjxeQmgYuvn7sRnnwa (program
+        // can5ZhfgQpi7jymkxE7uEv4ZVm3X2f51KThTUtdWrFs), whose payload
+        // inflates only from trailing[data.len() - data_length..].
+        let mut blob =
+            build_metadata_account(&PROGRAM, Compression::Zlib, DataSource::Direct, idl_json());
+        let len_end = 1 + 32 + 32 + 1 + 1 + 16 + 1 + 1 + 1 + 1 + 4;
+        blob.splice(len_end..len_end, [0u8; 5]);
+        let decoded = decode_metadata_account(&blob, &PROGRAM)
+            .expect("decode ok")
+            .expect("Some idl");
+        assert_eq!(decoded.address, PROGRAM_STR);
+        assert_eq!(decoded.name.as_deref(), Some("Mini"));
     }
 
     #[test]
