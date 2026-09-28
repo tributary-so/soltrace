@@ -9,7 +9,7 @@ pub mod retry;
 pub mod types;
 pub mod utils;
 
-pub use db::{Database, DatabaseBackend, EventRecord, create_backend};
+pub use db::{create_backend, Database, DatabaseBackend, EventRecord};
 pub use error::{Result, SoltraceError};
 pub use event::EventDecoder;
 pub use idl::IdlParser;
@@ -18,9 +18,8 @@ pub use idl_event::IdlEventDecoder;
 // EventDecoder (and, later, the live subscription task) without a direct arc-swap dep.
 pub use arc_swap::ArcSwap;
 pub use onchain_idl::{
-    PROGRAM_METADATA_ID, decode_anchor_classic_account, decode_metadata_account,
-    derive_anchor_classic_idl_pda, derive_canonical_idl_pda, fetch_canonical_idl,
-    fetch_onchain_idl,
+    decode_anchor_classic_account, decode_metadata_account, derive_anchor_classic_idl_pda,
+    derive_canonical_idl_pda, fetch_canonical_idl, fetch_onchain_idl, PROGRAM_METADATA_ID,
 };
 #[cfg(feature = "kafka")]
 pub use queue::kafka::{KafkaConfig, KafkaProducer};
@@ -31,9 +30,9 @@ pub use types::{
     CpiEvent, EventDiscriminator, InnerInstructionInfo, ProgramId, ProgramPrefixConfig, Slot,
 };
 pub use utils::{
-    EVENT_CPI_DISCRIMINATOR, cpi_dedup_index, decode_cpi_events, extract_cpi_events,
-    extract_event_from_log, extract_inner_instructions, load_idls, load_onchain_idls,
-    process_transaction, retain_indexable,
+    cpi_dedup_index, decode_cpi_events, extract_cpi_events, extract_event_from_log,
+    extract_inner_instructions, load_idls, load_onchain_idls, process_transaction,
+    retain_indexable, EVENT_CPI_DISCRIMINATOR,
 };
 
 // Re-export anchor_lang types for users who want to define their own events

@@ -15,9 +15,9 @@ use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    Database, EventDecoder, EventQueue, IdlParser, ProgramPrefixConfig, QueueEvent,
     cpi_dedup_index, create_backend, decode_cpi_events, load_idls, process_transaction,
-    retry_with_rate_limit, types::RawEvent, utils::extract_event_from_log,
+    retry_with_rate_limit, types::RawEvent, utils::extract_event_from_log, Database, EventDecoder,
+    EventQueue, IdlParser, ProgramPrefixConfig, QueueEvent,
 };
 #[cfg(feature = "kafka")]
 use soltrace_core::{KafkaConfig, KafkaProducer};

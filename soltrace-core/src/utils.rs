@@ -4,7 +4,7 @@ use crate::{
     types::InnerInstructionInfo, types::ParsedIdl, types::RawEvent,
 };
 use anyhow::Result;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use solana_sdk::pubkey::Pubkey;
 use solana_transaction_status::{
     EncodedConfirmedTransactionWithStatusMeta, EncodedTransaction, UiInstruction, UiMessage,
@@ -956,11 +956,9 @@ mod tests {
         });
 
         assert_eq!(parser.get_idls().len(), 2, "both IDLs should land");
-        assert!(
-            parser
-                .get_idls()
-                .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-        );
+        assert!(parser
+            .get_idls()
+            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
     }
 
     #[test]
@@ -1004,11 +1002,9 @@ mod tests {
         });
 
         assert_eq!(parser.get_idls().len(), 1, "only the Ok(Some) entry lands");
-        assert!(
-            parser
-                .get_idls()
-                .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-        );
+        assert!(parser
+            .get_idls()
+            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
     }
 
     #[test]
@@ -1037,11 +1033,9 @@ mod tests {
             1,
             "existing IDL must not be replaced"
         );
-        assert!(
-            parser
-                .get_idls()
-                .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-        );
+        assert!(parser
+            .get_idls()
+            .contains_key("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"));
     }
 
     // --- Epic 1 integration tests (soltrace-as68) ---
@@ -1126,11 +1120,9 @@ mod tests {
         let payload: Vec<u8> = disc.iter().copied().chain(42u64.to_le_bytes()).collect();
 
         // Before swap: no IDL → decode fails cleanly.
-        assert!(
-            decoder
-                .decode_event(&prog.to_string(), "sig", &payload)
-                .is_err()
-        );
+        assert!(decoder
+            .decode_event(&prog.to_string(), "sig", &payload)
+            .is_err());
 
         // Swap in a parser with the Swap event (on-chain IDL arrived).
         shared.store(std::sync::Arc::new(swap_idl(&prog)));
