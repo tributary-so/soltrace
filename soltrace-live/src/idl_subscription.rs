@@ -10,14 +10,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::StreamExt;
 use futures::stream::SelectAll;
+use futures::StreamExt;
 use solana_account_decoder_client_types::UiAccountEncoding;
 use solana_client::rpc_config::RpcAccountInfoConfig;
 use solana_commitment_config::CommitmentConfig;
 use solana_pubsub_client::nonblocking::pubsub_client::PubsubClient;
 use solana_sdk::pubkey::Pubkey;
-use soltrace_core::{ArcSwap, IdlParser, decode_metadata_account, derive_canonical_idl_pda};
+use soltrace_core::{decode_metadata_account, derive_canonical_idl_pda, ArcSwap, IdlParser};
 use spl_program_metadata_client::accounts::Metadata;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;

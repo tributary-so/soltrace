@@ -1,11 +1,11 @@
 use crate::{
-    db::{DatabaseBackend, EventRecord, generate_event_id},
+    db::{generate_event_id, DatabaseBackend, EventRecord},
     error::{Result, SoltraceError},
     types::{DecodedEvent, RawEvent, Slot},
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use mongodb::{Client, Collection, IndexModel, bson, bson::doc, options::IndexOptions};
+use mongodb::{bson, bson::doc, options::IndexOptions, Client, Collection, IndexModel};
 use serde::{Deserialize, Serialize};
 
 /// MongoDB document structure for events

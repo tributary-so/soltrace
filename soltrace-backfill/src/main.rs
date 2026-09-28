@@ -9,8 +9,8 @@ use solana_client::rpc_config::RpcTransactionConfig;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use soltrace_core::{
-    Database, EventDecoder, IdlParser, ProgramPrefixConfig, create_backend, load_idls,
-    process_transaction, retry_with_rate_limit,
+    create_backend, load_idls, process_transaction, retry_with_rate_limit, Database, EventDecoder,
+    IdlParser, ProgramPrefixConfig,
 };
 use std::collections::HashSet;
 use std::sync::Arc;

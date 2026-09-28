@@ -1,5 +1,5 @@
 use crate::{
-    db::{DatabaseBackend, EventRecord, generate_event_id},
+    db::{generate_event_id, DatabaseBackend, EventRecord},
     error::Result,
     types::{DecodedEvent, RawEvent, Slot},
 };
