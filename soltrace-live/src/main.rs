@@ -658,18 +658,34 @@ async fn websocket_handler(
 
     info!("WebSocket connected successfully");
 
-    // Subscribe to logs for the specified programs
-    let filter = RpcTransactionLogsFilter::Mentions(program_ids_str.to_vec());
+    // One logsSubscribe per program: the pubsub spec only honors the first
+    // entry of a multi-address Mentions filter and most providers (e.g.
+    // rpcpool/Triton) reject multi-address requests outright with
+    // "Only 1 address supported".
     let logs_config = RpcTransactionLogsConfig {
         commitment: Some(commitment_config),
     };
 
-    let (mut notifications, unsubscribe) = pubsub_client
-        .logs_subscribe(filter, logs_config)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to subscribe to logs: {}", e))?;
+    let mut streams = Vec::with_capacity(program_ids_str.len());
+    let mut unsubscribes = Vec::with_capacity(program_ids_str.len());
+    for pid in program_ids_str {
+        let (notifications, unsubscribe) = pubsub_client
+            .logs_subscribe(
+                RpcTransactionLogsFilter::Mentions(vec![pid.clone()]),
+                logs_config.clone(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to subscribe to logs for {}: {}", pid, e))?;
+        streams.push(notifications);
+        unsubscribes.push(unsubscribe);
+    }
 
-    info!("Successfully subscribed to program logs");
+    let mut notifications = futures::stream::select_all(streams);
+
+    info!(
+        "Successfully subscribed to logs for {} program(s)",
+        program_ids_str.len()
+    );
     info!("WebSocket keep-alive: read timeout = {}s", ping_interval);
 
     // Create channel for processing logs asynchronously
@@ -682,7 +698,12 @@ async fn websocket_handler(
 
     // Spawn processing task
     let processor_handle = tokio::spawn(async move {
+        let mut seen = SeenSignatures::default();
         while let Some(message) = rx.recv().await {
+            if !seen.insert(&message.signature) {
+                debug!("Skipping duplicate notification for {}", message.signature);
+                continue;
+            }
             match process_logs_message(
                 message,
                 &program_ids_clone,
@@ -746,7 +767,9 @@ async fn websocket_handler(
     let _ = processor_handle.await;
 
     // Unsubscribe
-    unsubscribe().await;
+    for unsubscribe in unsubscribes {
+        unsubscribe().await;
+    }
 
     result
 }
@@ -776,6 +799,44 @@ fn parse_onchain_programs(csv: &str) -> Result<Vec<Pubkey>> {
                 .map_err(|e| anyhow::anyhow!("Invalid --onchain-programs entry '{s}': {e}"))
         })
         .collect()
+}
+
+/// Live-session dedup for logs notifications. One subscription per program
+/// means a transaction mentioning N monitored programs fires N identical
+/// notifications; the extras must not trigger a second get_transaction fetch.
+/// (Persistent dedup is the DB's ON CONFLICT DO NOTHING — this is only the
+/// in-session RPC-cost guard.)
+struct SeenSignatures {
+    seen: std::collections::HashSet<String>,
+    order: std::collections::VecDeque<String>,
+    cap: usize,
+}
+
+impl Default for SeenSignatures {
+    fn default() -> Self {
+        Self {
+            seen: std::collections::HashSet::new(),
+            order: std::collections::VecDeque::new(),
+            cap: 4096,
+        }
+    }
+}
+
+impl SeenSignatures {
+    /// Returns false if the signature is already in the window.
+    fn insert(&mut self, signature: &str) -> bool {
+        if self.seen.contains(signature) {
+            return false;
+        }
+        if self.order.len() == self.cap {
+            if let Some(evicted) = self.order.pop_front() {
+                self.seen.remove(&evicted);
+            }
+        }
+        self.seen.insert(signature.to_string());
+        self.order.push_back(signature.to_string());
+        true
+    }
 }
 
 /// Process a logs message from PubsubClient
@@ -1047,5 +1108,29 @@ mod tests {
             }
             _ => panic!("expected Run subcommand"),
         }
+    }
+
+    // --- Regression (soltrace-s2y3): per-program subscriptions fire N
+    // identical notifications for a tx mentioning N monitored programs.
+
+    #[test]
+    fn test_seen_signatures_dedups_within_window() {
+        let mut seen = SeenSignatures::default();
+        assert!(seen.insert("sigA"));
+        assert!(!seen.insert("sigA"), "second notification must be dropped");
+        assert!(seen.insert("sigB"));
+    }
+
+    #[test]
+    fn test_seen_signatures_evicts_oldest_at_cap() {
+        let mut seen = SeenSignatures {
+            cap: 2,
+            ..Default::default()
+        };
+        assert!(seen.insert("sigA"));
+        assert!(seen.insert("sigB"));
+        assert!(seen.insert("sigC"), "new signature accepted at cap");
+        assert!(seen.insert("sigA"), "evicted oldest re-accepted");
+        assert!(!seen.insert("sigC"), "recent signature still deduped");
     }
 }
