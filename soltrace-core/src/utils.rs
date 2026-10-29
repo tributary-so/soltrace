@@ -1073,7 +1073,7 @@ mod tests {
     /// parser after load_onchain_idls_with processes a real Metadata blob.
     #[test]
     fn test_epic1_file_and_onchain_coexist() {
-        let file_prog = pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+        let _file_prog = pk("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
         let onchain_prog = pk("11111111111111111111111111111111");
 
         let mut parser = IdlParser::new();

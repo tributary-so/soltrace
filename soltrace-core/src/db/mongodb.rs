@@ -1,7 +1,7 @@
 use crate::{
-    db::{generate_event_id, DatabaseBackend, EventRecord},
+    db::{generate_event_id, DatabaseBackend},
     error::{Result, SoltraceError},
-    types::{DecodedEvent, RawEvent, Slot},
+    types::{DecodedEvent, RawEvent},
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -18,19 +18,6 @@ struct EventDocument {
     event_name: String,
     data: bson::Document,
     timestamp: DateTime<Utc>,
-}
-
-impl From<EventDocument> for EventRecord {
-    fn from(doc: EventDocument) -> Self {
-        EventRecord {
-            id: doc.id,
-            slot: doc.slot,
-            signature: doc.signature,
-            event_name: doc.event_name,
-            data: bson::Bson::Document(doc.data).into(),
-            timestamp: doc.timestamp,
-        }
-    }
 }
 
 /// MongoDB database backend
@@ -129,77 +116,6 @@ impl DatabaseBackend for MongoDbBackend {
             .map_err(|e| SoltraceError::Database(format!("Failed to insert event: {}", e)))?;
 
         Ok(event_id)
-    }
-
-    async fn get_events_by_slot_range(
-        &self,
-        start_slot: Slot,
-        end_slot: Slot,
-    ) -> Result<Vec<EventRecord>> {
-        let filter = doc! {
-            "slot": {
-                "$gte": start_slot as i64,
-                "$lte": end_slot as i64
-            }
-        };
-
-        let mut cursor = self
-            .collection
-            .find(filter)
-            .sort(doc! { "slot": 1 })
-            .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to query events: {}", e)))?;
-
-        let mut events = Vec::new();
-        while cursor
-            .advance()
-            .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to advance cursor: {}", e)))?
-        {
-            let doc = cursor.deserialize_current().map_err(|e| {
-                SoltraceError::Database(format!("Failed to deserialize event: {}", e))
-            })?;
-            events.push(doc.into());
-        }
-
-        Ok(events)
-    }
-
-    async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>> {
-        let filter = doc! { "event_name": event_name };
-
-        let mut cursor = self
-            .collection
-            .find(filter)
-            .sort(doc! { "slot": -1 })
-            .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to query events: {}", e)))?;
-
-        let mut events = Vec::new();
-        while cursor
-            .advance()
-            .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to advance cursor: {}", e)))?
-        {
-            let doc = cursor.deserialize_current().map_err(|e| {
-                SoltraceError::Database(format!("Failed to deserialize event: {}", e))
-            })?;
-            events.push(doc.into());
-        }
-
-        Ok(events)
-    }
-
-    async fn event_exists(&self, signature: &str) -> Result<bool> {
-        let filter = doc! { "signature": signature };
-
-        let count = self
-            .collection
-            .count_documents(filter)
-            .await
-            .map_err(|e| SoltraceError::Database(format!("Failed to count events: {}", e)))?;
-
-        Ok(count > 0)
     }
 
     async fn get_latest_signature(&self) -> Result<Option<String>> {

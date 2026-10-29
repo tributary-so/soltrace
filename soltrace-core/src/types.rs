@@ -37,7 +37,12 @@ pub struct IdlField {
 /// Represents a decoded Anchor event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecodedEvent {
+    /// Legacy composed name `"{prefix}_{event}"` — dedup-id hash input and the
+    /// shape frozen backends (sqlite/mongo) still store.
     pub event_name: String,
+    /// Bare IDL event name — what the postgres v2 schema stores in event_rows.
+    #[serde(default)]
+    pub event_name_bare: String,
     pub data: serde_json::Value,
     pub discriminator: EventDiscriminator,
 }

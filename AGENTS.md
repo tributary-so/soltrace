@@ -182,11 +182,14 @@ Conventions:
 
 ### Database backends
 
-`soltrace-core/src/db/` has a `Database` trait with three backends
-auto-selected by URL scheme: `sqlite:` (JSON text), `postgres:` (JSONB + GIN),
-`mongodb:` (nested docs). When adding a column or changing the schema, update
-**all three** `init`/`insert` implementations plus the
-`CREATE TABLE` in sqlite.
+`soltrace-core/src/db/` has a `DatabaseBackend` trait with three backends
+auto-selected by URL scheme: `sqlite:` (JSON text, v1 schema frozen),
+`postgres:` (JSONB + GIN, **v2 schema**: `programs` dimension + `event_rows`,
+legacy `events` kept as a deprecated compat VIEW, migrations via
+`sqlx::migrate!` in `soltrace-core/migrations/`), `mongodb:` (nested docs,
+v1 frozen). Schema changes apply to **postgres only** going forward —
+sqlite/mongo stay on the v1 prefixed-`event_name` shape by decision
+(2026-10-29); `programs.name` is immutable once assigned (dedup-id input).
 
 ## Build and Deployment
 

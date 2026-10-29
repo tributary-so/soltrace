@@ -116,6 +116,10 @@ async fn run_backfill(cli: Cli) -> Result<()> {
     if !cli.program_prefixes.is_empty() {
         prefix_config.add_mappings_from_string(&cli.program_prefixes);
     }
+    // Explicit operator mappings only — load_from_idls below fills the rest
+    // with the "default" prefix, which must never become a postgres
+    // programs.name (that collapse is what the v2 schema removes).
+    let seed_mappings = prefix_config.program_mappings.clone();
     let mut candidates: Vec<Pubkey> = prefix_config
         .get_program_ids()
         .into_iter()
@@ -176,6 +180,9 @@ async fn run_backfill(cli: Cli) -> Result<()> {
 
     // Initialize database
     let db = create_backend(&cli.db_url).await?;
+    // Postgres v2: register program rows (first-seen names) and backfill
+    // legacy prefixed rows; no-op on frozen backends.
+    db.seed_programs(&seed_mappings).await?;
     info!("Database connected: {}", cli.db_url);
 
     // Track processed signatures across all programs

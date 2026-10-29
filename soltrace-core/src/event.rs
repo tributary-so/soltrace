@@ -67,12 +67,14 @@ impl EventDecoder {
         let decoded =
             self.decode_event_data(program_id, signature, &event_def, event_data, types)?;
 
-        // Prefix event name with program prefix
+        // Composed name keeps legacy ids and frozen backends stable; the bare
+        // name is what the postgres v2 schema stores.
         let prefix = self.prefix_config.get_prefix(program_id);
         let prefixed_event_name = format!("{}_{}", prefix, event_def.name);
 
         Ok(DecodedEvent {
             event_name: prefixed_event_name,
+            event_name_bare: event_def.name.clone(),
             data: decoded,
             discriminator,
         })

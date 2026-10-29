@@ -1,10 +1,8 @@
 use crate::{
     error::{Result, SoltraceError},
-    types::{DecodedEvent, RawEvent, Slot},
+    types::{DecodedEvent, RawEvent},
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
@@ -17,22 +15,24 @@ pub fn generate_event_id(signature: &str, index: usize, event_type: &str) -> [u8
     bytes
 }
 
-/// Event record stored in the database
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EventRecord {
-    pub id: String,
-    pub slot: i64,
-    pub signature: String,
-    pub event_name: String,
-    pub data: serde_json::Value,
-    pub timestamp: DateTime<Utc>,
-}
-
 /// Trait defining the database backend interface
+// clippy's double_must_use misfires on the async-trait desugaring
+// (Result + Box<Future> are both must_use).
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait DatabaseBackend: Send + Sync {
     /// Run database migrations/schema setup
     async fn run_migrations(&self) -> Result<()>;
+
+    /// Register operator program-name mappings and backfill legacy prefixed
+    /// rows (postgres v2 schema). Default no-op: backends frozen on the v1
+    /// schema have nothing to seed.
+    async fn seed_programs(
+        &self,
+        _mappings: &std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     /// Store a decoded event
     async fn insert_event(
@@ -41,19 +41,6 @@ pub trait DatabaseBackend: Send + Sync {
         raw: &RawEvent,
         index: usize,
     ) -> Result<String>;
-
-    /// Get events by slot range
-    async fn get_events_by_slot_range(
-        &self,
-        start_slot: Slot,
-        end_slot: Slot,
-    ) -> Result<Vec<EventRecord>>;
-
-    /// Get events by event name
-    async fn get_events_by_name(&self, event_name: &str) -> Result<Vec<EventRecord>>;
-
-    /// Check if an event already exists (by signature)
-    async fn event_exists(&self, signature: &str) -> Result<bool>;
 
     /// Get the most recent signature stored in the database
     /// Returns None if no events exist
