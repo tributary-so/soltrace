@@ -248,6 +248,10 @@ async fn run_indexer(
     if !program_prefixes.is_empty() {
         prefix_config.add_mappings_from_string(&program_prefixes);
     }
+    // Explicit operator mappings only — load_from_idls below fills the rest
+    // with the "default" prefix, and seeding those would name postgres
+    // program rows "default" (the exact collapse the v2 schema removes).
+    let seed_mappings = prefix_config.program_mappings.clone();
     let mut candidates: Vec<Pubkey> = prefix_config
         .get_program_ids()
         .into_iter()
@@ -276,6 +280,10 @@ async fn run_indexer(
     }
     // Add IDL-backed programs not named in --program-prefixes (default prefix).
     prefix_config.load_from_idls(loaded_idls);
+
+    // Postgres v2: register program rows (first-seen names) and backfill
+    // legacy prefixed rows; no-op on frozen backends.
+    db.seed_programs(&seed_mappings).await?;
 
     let mut program_ids = prefix_config.get_program_ids();
 

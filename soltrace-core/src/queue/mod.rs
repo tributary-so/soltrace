@@ -30,6 +30,9 @@ impl QueueEvent {
     }
 }
 
+// clippy's double_must_use misfires on the async-trait desugaring
+// (anyhow::Result + Box<Future> are both must_use).
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait EventQueue: Send + Sync {
     async fn send(&self, event: &QueueEvent) -> anyhow::Result<()>;

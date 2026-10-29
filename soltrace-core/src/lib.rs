@@ -9,7 +9,7 @@ pub mod retry;
 pub mod types;
 pub mod utils;
 
-pub use db::{create_backend, Database, DatabaseBackend, EventRecord};
+pub use db::{create_backend, Database, DatabaseBackend};
 pub use error::{Result, SoltraceError};
 pub use event::EventDecoder;
 pub use idl::IdlParser;

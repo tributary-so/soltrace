@@ -298,26 +298,48 @@ signature carry events from both paths without collision.
 
 ### Database schema
 
-SQLite (default):
+**PostgreSQL (v2 schema)** — program identity lives in a dimension table;
+`event_rows` stores the bare Anchor event name:
 
 ```sql
-CREATE TABLE events (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id    TEXT NOT NULL UNIQUE,           -- hash of (sig, index, name)
-    slot        INTEGER NOT NULL,
-    signature   TEXT NOT NULL,
-    ix_index    INTEGER NOT NULL,               -- log counter or CPI offset
-    program_id  TEXT NOT NULL,
-    event_name  TEXT NOT NULL,                  -- <prefix>_<EventName>
-    discriminator TEXT NOT NULL,                -- 16-char hex
-    data        TEXT NOT NULL,                  -- JSON-encoded event fields
-    log         TEXT,                           -- source log line (empty for CPI)
-    timestamp   TEXT NOT NULL
+CREATE TABLE programs (
+    id      SERIAL PRIMARY KEY,
+    address TEXT NOT NULL UNIQUE,        -- on-chain program id
+    name    TEXT NOT NULL                -- from --program-prefixes at first
+);                                      -- sight; full address if unmapped
+
+CREATE TABLE event_rows (
+    id         BYTEA PRIMARY KEY,        -- sha256(sig, index, "name_bare")
+    slot       BIGINT NOT NULL,
+    signature  VARCHAR(88) NOT NULL,
+    event_name VARCHAR(64) NOT NULL,     -- bare Anchor event name
+    program_id INTEGER NULL REFERENCES programs(id),
+    data       JSONB NOT NULL,
+    timestamp  TIMESTAMPTZ NOT NULL
 );
+
+-- Deprecated compat view: reproduces the pre-v2 `events` table byte-for-byte
+-- ("name_bare" for migrated rows, the stored name as-is for legacy ones).
+CREATE VIEW events AS
+SELECT e.id, e.slot, e.signature,
+       COALESCE(p.name || '_' || e.event_name, e.event_name) AS event_name,
+       e.data, e.timestamp
+FROM event_rows e LEFT JOIN programs p ON p.id = e.program_id;
 ```
 
-PostgreSQL mirrors this with `JSONB` for `data` plus a GIN index. MongoDB
-stores `data` as a nested document.
+Migration notes:
+
+- `programs.name` is **immutable once assigned** — it feeds the dedup-id
+  hash, so renaming would duplicate rows on any re-walk. `--program-prefixes`
+  names apply at first sight only.
+- Legacy prefixed rows are rewritten at startup (config-driven backfill);
+  rows that match no configured name keep their prefixed `event_name` and a
+  NULL `program_id` — indistinguishable programs were never recoverable.
+- Schema runs via `sqlx::migrate!` (`soltrace-core/migrations/`).
+
+**SQLite / MongoDB** — frozen on the v1 schema (`events` table/collection,
+prefixed `event_name`, e.g. `tributary_PaymentCollected`). New deployments
+that want the normalized schema should use PostgreSQL.
 
 ## IDL Directory
 

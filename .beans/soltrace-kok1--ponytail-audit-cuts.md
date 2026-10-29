@@ -1,10 +1,11 @@
 ---
 # soltrace-kok1
 title: Ponytail audit cuts
-status: todo
+status: completed
 type: milestone
+priority: normal
 created_at: 2026-07-28T07:56:23Z
-updated_at: 2026-07-28T07:56:23Z
+updated_at: 2026-10-29T13:04:17Z
 ---
 
 # Ponytail audit cuts
